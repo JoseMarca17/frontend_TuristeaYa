@@ -1,72 +1,79 @@
-# TuristeaYa · Integración Expo
+# TuristeaYa · Expo
 
-La aplicación usa Expo Router, React Native y consume la API desplegada de TuristeaYa. Este es el único frontend mantenido del proyecto y funciona en Android, iOS y web mediante React Native Web.
+Frontend móvil y web de TuristeaYa. Usa Expo Router y React Native Web, y consume la API FastAPI desplegada en Render.
 
-Ejecuta `npm ci` y después `npm start`. Para Expo Go usa `npm run go`; para navegador usa `npm run web`.
+## Requisitos
 
-La API predeterminada es `https://backend-turisteaya.onrender.com`. Para cambiarla localmente crea un archivo `.env.local`:
+- Node.js LTS y npm.
+- Expo Go compatible con **Expo SDK 58** para probar en un teléfono.
+- Para Android: Android Studio/emulador es opcional.
+- Para iOS: Xcode es necesario para el simulador y macOS es necesario para compilar iOS.
+
+## Instalar y ejecutar
+
+```bash
+npm ci
+npm run go       # Expo Go por LAN
+npm run web      # navegador
+npm start        # menú de Expo
+```
+
+Para usar Expo Go, abre la aplicación Expo Go y escanea el QR que muestra la terminal. El teléfono y el computador deben estar en la misma red Wi-Fi. Si la conexión LAN falla, inicia Expo y selecciona el modo túnel desde el menú.
+
+## API y variables de entorno
+
+La API por defecto es:
+
+```text
+https://backend-turisteaya.onrender.com
+```
+
+Para cambiarla localmente, crea `.env.local` a partir de `.env.example`:
+
+```bash
+cp .env.example .env.local       # macOS/Linux/Git Bash
+```
+
+En Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env.local
+```
+
+Edita el archivo si hace falta:
 
 ```env
 EXPO_PUBLIC_API_URL=https://backend-turisteaya.onrender.com
 ```
 
-Expo SDK 58 requiere una versión de Expo Go compatible con SDK 58. Si Expo Go no puede abrir el proyecto, actualiza Expo Go y verifica las dependencias con `npx expo-doctor`.
+Para un backend local desde un teléfono usa la IP LAN del computador, no `localhost`:
 
-Hello 👋
-
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
-
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```env
+EXPO_PUBLIC_API_URL=http://192.168.1.25:8000
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+El frontend no necesita claves de Supabase. Las claves de Supabase pertenecen al backend y no deben colocarse en este proyecto ni en `.env.local`.
 
-### Other setup steps
+## Verificación
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+npm run lint
+npx tsc --noEmit
+node scripts/test-routes.cjs
+```
 
-## Learn more
+## Estructura
 
-To learn more about developing your project with Expo, look at the following resources:
+- `src/app/`: pantallas y rutas Expo Router.
+- `src/components/`: componentes reutilizables.
+- `src/features/`: funcionalidades específicas del turista.
+- `src/services/`: API, sesión, catálogo y medios.
+- `assets/`: iconos, splash e imágenes de la aplicación.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Enlaces del backend
 
-## Join the community
+- Salud: https://backend-turisteaya.onrender.com/health
+- Swagger: https://backend-turisteaya.onrender.com/docs
+- Repositorio: https://github.com/JoseMarca17/backend_TuristeaYa
 
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
-
-# TuristeaYa
+Render puede tardar unos segundos en responder después de un periodo sin uso. Eso es normal en el primer request.
