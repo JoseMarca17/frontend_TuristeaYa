@@ -1,0 +1,9 @@
+**/.env
+**/.env*.local
+**/node_modules/
+**/.venv*/
+**/.npm-cache/
+**/__pycache__/
+**/.expo/
+**/dist/
+**/.test-deps/
