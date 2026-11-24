@@ -10,10 +10,10 @@ export const colors = {
   primaryDeep: '#39795e',
   /** Texto principal (verde muy oscuro). */
   ink: '#243d35',
-  /** Texto secundario: subtítulos, cuerpo de tarjetas. */
-  inkSoft: '#61736a',
-  /** Texto atenuado: placeholders de formularios. */
-  inkMuted: '#596b63',
+  /** Texto secundario: subtítulos, cuerpo de tarjetas (contraste WCAG AA >= 4.5:1). */
+  inkSoft: '#495c54',
+  /** Texto atenuado: placeholders y notas (contraste WCAG AA >= 4.5:1). */
+  inkMuted: '#465850',
   /** Fondo de la aplicación. */
   background: '#f7faf8',
   /** Superficie de tarjetas e inputs. */

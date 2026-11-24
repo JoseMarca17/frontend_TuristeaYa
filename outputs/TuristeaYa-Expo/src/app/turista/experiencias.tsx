@@ -61,15 +61,22 @@ export default function ExperiencesScreen() {
             <View style={{ gap: spacing.xs + 2, marginTop: 4 }}>
               <View style={styles.badgeRow}>
                 {row.vip_only ? <Badge label="Exclusiva VIP" tone="cream" /> : <Badge label="Abierta a turistas" tone="green" />}
+                {!row._upcoming ? <Badge label="Fecha pasada (solo lectura)" tone="cream" /> : <Badge label="Disponible para reservar" tone="green" />}
               </View>
+              {!row._upcoming ? (
+                <AppText variant="micro" color="inkSoft">
+                  Esta actividad tiene fecha pasada; Render solo permite reservar experiencias con fecha futura (un Negocio puede crear nuevas fechas).
+                </AppText>
+              ) : null}
               {session || demoRole ? (
                 <>
                   <Button
-                    title={selected === row.id ? 'Cerrar reserva' : 'Reservar'}
+                    title={selected === row.id ? 'Cerrar reserva' : row._upcoming ? 'Reservar' : 'No disponible (fecha pasada)'}
                     size="sm"
+                    disabled={!row._upcoming}
                     onPress={() => setSelected(selected === row.id ? null : row.id)}
                   />
-                  {selected === row.id ? (
+                  {selected === row.id && row._upcoming ? (
                     <TransactionForm
                       key={`${session?.user.id || demoRole}-${row.id}`}
                       kind="reserve"

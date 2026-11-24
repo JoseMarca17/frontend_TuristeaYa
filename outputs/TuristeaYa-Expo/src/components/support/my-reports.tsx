@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 
 import { Screen } from '@/components/layout/screen';
 import { AppText } from '@/components/ui/app-text';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { FormField } from '@/components/ui/form-field';
@@ -18,12 +19,20 @@ import { colors, radius, spacing } from '@/theme';
 import { TicketConversation } from './ticket-conversation';
 
 const kinds = [
-  ['other', 'General'],
-  ['coupon', 'Cupón'],
-  ['place', 'Lugar'],
+  ['other', 'General / Lugar'],
+  ['coupon', 'Disputa de cupón'],
+  ['review', 'Reporte de reseña'],
   ['route', 'Ruta'],
   ['account', 'Cuenta / VIP'],
 ] as const;
+
+const priorities = ['low', 'medium', 'high'] as const;
+
+const priorityLabels: Record<string, string> = {
+  low: 'Baja',
+  medium: 'Media',
+  high: 'Alta',
+};
 
 export function MyReports({ create = false }: { create?: boolean }) {
   const session = useAuthStore((s) => s.session);
@@ -32,6 +41,7 @@ export function MyReports({ create = false }: { create?: boolean }) {
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   const [kind, setKind] = useState<(typeof kinds)[number][0]>('other');
+  const [priority, setPriority] = useState<(typeof priorities)[number]>('medium');
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -54,13 +64,19 @@ export function MyReports({ create = false }: { create?: boolean }) {
     try {
       await createRecord(
         'tickets',
-        { user_id: session.user.id, subject: subject.trim(), description: description.trim(), kind },
-        'Enviando reporte a Soporte…',
+        {
+          user_id: session.user.id,
+          subject: subject.trim(),
+          description: description.trim(),
+          kind,
+          priority,
+        },
+        'Enviando ticket a Soporte…',
       );
       setSubject('');
       setDescription('');
-      setNotice('Reporte enviado.');
-      showToast('Reporte creado en Render.', 'success');
+      setNotice('Ticket enviado a Soporte.');
+      showToast('Ticket creado en Render.', 'success');
       retry();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'No se pudo enviar.');
@@ -71,22 +87,28 @@ export function MyReports({ create = false }: { create?: boolean }) {
   }
 
   return (
-    <Screen title={create ? 'Reportar un problema' : 'Ayuda y mis reportes'} subtitle="Seguimiento de tus consultas en Render">
+    <Screen title={create ? 'Reportar un problema' : 'Ayuda y mis reportes'} subtitle="Seguimiento de tus tickets y disputas en Render">
       {!session ? <Button title="Iniciar sesión" onPress={() => router.navigate('/login')} /> : null}
       {session && create ? (
         <View style={styles.formCard}>
-          <AppText variant="label">Categoría del reporte</AppText>
+          <AppText variant="label">Tipo de caso</AppText>
           <View style={styles.chipRow}>
             {kinds.map(([k, label]) => (
               <Chip key={k} label={label} selected={kind === k} onPress={() => setKind(k)} />
             ))}
           </View>
+          <AppText variant="label">Prioridad</AppText>
+          <View style={styles.chipRow}>
+            {priorities.map((p) => (
+              <Chip key={p} label={priorityLabels[p] || p} selected={priority === p} onPress={() => setPriority(p)} />
+            ))}
+          </View>
           <FormField label="Asunto" value={subject} onChangeText={setSubject} maxLength={160} editable={!busy} />
-          <FormField label="Descripción" value={description} onChangeText={setDescription} maxLength={4000} editable={!busy} multiline />
-          <Button title="Enviar reporte (POST)" disabled={busy || !subject.trim() || !description.trim()} onPress={submit} />
+          <FormField label="Descripción detallada" value={description} onChangeText={setDescription} maxLength={4000} editable={!busy} multiline />
+          <Button title="Enviar ticket (POST)" disabled={busy || !subject.trim() || !description.trim()} onPress={submit} />
         </View>
       ) : (
-        <Button title="Nuevo reporte" onPress={() => router.navigate('/RamaNegocio/reportar')} />
+        <Button title="Nuevo ticket / reporte" onPress={() => router.navigate('/RamaNegocio/reportar')} />
       )}
 
       {loading ? <LoadingState label="Cargando reportes…" /> : null}
@@ -99,12 +121,13 @@ export function MyReports({ create = false }: { create?: boolean }) {
           <ListCard
             key={row.id}
             title={String(row.subject)}
-            body={`${row.status} · ${row.priority}\n${row.description || ''}`}
+            body={`${row.kind || 'general'} · ${row.status} · Prioridad: ${priorityLabels[String(row.priority)] || row.priority}\n${row.description || ''}`}
             footer={
-              <>
+              <View style={{ gap: 6, marginTop: 4 }}>
+                <Badge label={`Estado: ${row.status}`} tone={row.status === 'resolved' ? 'green' : 'cream'} />
                 <Button title={selected === row.id ? 'Cerrar conversación' : 'Ver conversación'} size="sm" onPress={() => setSelected(selected === row.id ? null : row.id)} />
                 {selected === row.id ? <TicketConversation key={`${session?.user.id}-${row.id}`} ticketId={row.id} /> : null}
-              </>
+              </View>
             }
           />
         ))}

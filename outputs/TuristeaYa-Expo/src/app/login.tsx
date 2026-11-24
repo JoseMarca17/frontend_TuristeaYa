@@ -21,11 +21,26 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [fallbackAccount, setFallbackAccount] = useState<DemoAccount | null>(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryNotice, setRecoveryNotice] = useState('');
 
   const loginReal = useAuthStore((s) => s.loginReal);
   const loginDemoOnRender = useAuthStore((s) => s.loginDemoOnRender);
   const enterDemoPreview = useAuthStore((s) => s.enterDemoPreview);
   const showToast = useUiStore((s) => s.showToast);
+
+  function requestPasswordRecovery() {
+    const target = (recoveryEmail || email).trim();
+    if (!target || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) {
+      setRecoveryNotice('Ingresa un correo electrónico válido para solicitar la recuperación.');
+      return;
+    }
+    setRecoveryNotice(
+      `Correo verificado (${target}). Bloqueo del servidor: la API actual de Render (/api/v1/auth) aún no expone un endpoint /forgot-password ni /reset-password para enviar enlaces automáticos.`,
+    );
+    showToast('La recuperación automática depende de habilitar el endpoint en el backend.', 'info');
+  }
 
   async function login() {
     if (busy) return;
@@ -120,6 +135,34 @@ export default function LoginScreen() {
             <Button title="Modo invitado" variant="soft" onPress={() => router.navigate('/turista/rutas-disponibles')} />
           </View>
         </View>
+        <Button
+          title={recoveryOpen ? 'Ocultar recuperación' : '¿Olvidaste tu contraseña?'}
+          variant="soft"
+          size="sm"
+          onPress={() => {
+            setRecoveryEmail((prev) => prev || email);
+            setRecoveryOpen((v) => !v);
+          }}
+        />
+        {recoveryOpen ? (
+          <View style={styles.alertBox} accessibilityRole="region" accessibilityLabel="Recuperación de contraseña">
+            <AppText variant="label">Recuperación de contraseña</AppText>
+            <FormField
+              label="Correo de tu cuenta"
+              placeholder="usuario@ejemplo.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={recoveryEmail}
+              onChangeText={setRecoveryEmail}
+            />
+            <Button title="Verificar estado de recuperación" size="sm" variant="secondary" onPress={requestPasswordRecovery} />
+            {recoveryNotice ? (
+              <AppText variant="caption" style={styles.alertText} accessibilityRole="alert">
+                {recoveryNotice}
+              </AppText>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.demoHeader}>

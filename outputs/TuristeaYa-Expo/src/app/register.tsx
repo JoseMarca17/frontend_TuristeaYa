@@ -21,22 +21,25 @@ export default function RegisterScreen() {
   const [accepted, setAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [pendingEmailNotice, setPendingEmailNotice] = useState('');
 
   const registerReal = useAuthStore((s) => s.registerReal);
   const showToast = useUiStore((s) => s.showToast);
 
   async function register() {
     if (busy) return;
-    if (!name.trim() || !email.trim() || password.length < 8 || password !== confirm || !accepted) {
-      setMessage('Completa tus datos, usa al menos 8 caracteres, confirma la contraseña y acepta los términos.');
+    if (!name.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || password.length < 8 || password !== confirm || !accepted) {
+      setMessage('Ingresa un nombre válido, correo válido, contraseña de al menos 8 caracteres coincidente y acepta los términos.');
       return;
     }
     setBusy(true);
     setMessage('');
+    setPendingEmailNotice('');
     try {
       const notice = await registerReal(name, email, password, accepted);
       if (notice) {
-        setMessage(notice);
+        setPendingEmailNotice(notice);
+        showToast('Cuenta registrada. Confirma tu correo si el proveedor lo solicita.', 'info');
       } else {
         showToast('Cuenta creada y conectada a Render.', 'success');
         router.replace('/turista');
@@ -81,6 +84,16 @@ export default function RegisterScreen() {
           onPress={() => setAccepted((value) => !value)}
         />
         {message ? <AppText accessibilityRole="alert" style={styles.alert}>{message}</AppText> : null}
+        {pendingEmailNotice ? (
+          <View style={styles.confirmBox} accessibilityRole="region" accessibilityLabel="Confirmación de correo">
+            <AppText variant="label" color="primary">Confirmación de correo pendiente</AppText>
+            <AppText variant="bodySmall">{pendingEmailNotice}</AppText>
+            <AppText variant="caption" color="inkSoft">
+              Nota: una vez confirmes el enlace recibido en {email.trim()}, inicia sesión aquí. (Render no expone reenvío automático por API).
+            </AppText>
+            <Button title="Ir a iniciar sesión" size="sm" variant="secondary" onPress={() => router.replace('/login')} />
+          </View>
+        ) : null}
         <Button title={busy ? 'Creando cuenta…' : 'Registrarme'} disabled={busy} onPress={register} />
       </View>
       <Button
@@ -103,5 +116,13 @@ const styles = StyleSheet.create({
   },
   alert: {
     color: '#991b1b',
+  },
+  confirmBox: {
+    backgroundColor: colors.surfaceGreenSoft,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderSoftGreen,
+    padding: spacing.md,
+    gap: spacing.xs,
   },
 });

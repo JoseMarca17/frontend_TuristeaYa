@@ -2,11 +2,13 @@ import { useCallback, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 
+import { SponsoredCampaignBanner } from '@/components/ads/sponsored-banner';
 import { Screen } from '@/components/layout/screen';
 import { PlacePhoto } from '@/components/place-photo';
 import { AppText } from '@/components/ui/app-text';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
 import { ListCard } from '@/components/ui/list-card';
 import { ErrorState, LoadingState } from '@/components/ui/loading-state';
 import { LocationCard } from '@/features/turista/components/location-card';
@@ -53,9 +55,12 @@ export default function LugarScreen() {
     );
   }
 
-  if (error || !data?.place) {
+  if (error || !data?.place || data.place.published === false) {
     return (
-      <Screen title="Lugar no encontrado" subtitle="Esta parada no está disponible">
+      <Screen
+        title={data?.place?.published === false ? 'Lugar no publicado' : 'Lugar no encontrado'}
+        subtitle={data?.place?.published === false ? 'Este comercio aún está en revisión administrativa' : 'Esta parada no está disponible'}
+      >
         {error ? <ErrorState message={error} onRetry={retry} /> : null}
         <Button title="Explorar catálogo" onPress={() => router.replace('/turista/catalogo')} />
         <Button title="Volver a Inicio" variant="secondary" onPress={() => router.replace('/turista')} />
@@ -69,12 +74,14 @@ export default function LugarScreen() {
   const hasPoint = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
   const hoursText = data.hours.length
     ? data.hours
-        .slice()
-        .sort((a, b) => Number(a.weekday) - Number(b.weekday))
-        .map((h) => `${weekdayNames[Number(h.weekday)] || 'Día'}: ${String(h.opens_at).slice(0, 5)} - ${String(h.closes_at).slice(0, 5)}`)
-        .join('\n')
+      .slice()
+      .sort((a, b) => Number(a.weekday) - Number(b.weekday))
+      .map((h) => `${weekdayNames[Number(h.weekday)] || 'Día'}: ${String(h.opens_at).slice(0, 5)} - ${String(h.closes_at).slice(0, 5)}`)
+      .join('\n')
     : 'Consulta horarios directamente en el lugar.';
   const services = Array.isArray(remote.services) ? remote.services.map(String) : [];
+  const ratingSum = data.reviews.reduce((sum, r) => sum + Number(r.rating || 0), 0);
+  const averageRating = data.reviews.length > 0 ? Math.round((ratingSum / data.reviews.length) * 10) / 10 : null;
 
   return (
     <RemotePlaceDetails
@@ -88,6 +95,7 @@ export default function LugarScreen() {
       hoursText={hoursText}
       services={services}
       reviewsCount={data.reviews.length}
+      averageRating={averageRating}
     />
   );
 }
@@ -103,6 +111,7 @@ function RemotePlaceDetails({
   hoursText,
   services,
   reviewsCount,
+  averageRating,
 }: {
   placeId: string;
   name: string;
@@ -114,10 +123,44 @@ function RemotePlaceDetails({
   hoursText: string;
   services: string[];
   reviewsCount: number;
+  averageRating: number | null;
 }) {
   const session = useAuthStore((s) => s.session);
   const showToast = useUiStore((s) => s.showToast);
   const [visiting, setVisiting] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportText, setReportText] = useState('');
+  const [reporting, setReporting] = useState(false);
+
+  async function submitPlaceReport() {
+    if (!session) {
+      router.navigate('/login');
+      return;
+    }
+    if (!reportText.trim() || reporting) return;
+    setReporting(true);
+    try {
+      await createRecord(
+        'tickets',
+        {
+          user_id: session.user.id,
+          place_id: placeId,
+          kind: 'other',
+          priority: 'medium',
+          subject: `Información incorrecta en ${name}`,
+          description: reportText.trim(),
+        },
+        'Enviando reporte de lugar…',
+      );
+      setReportText('');
+      setReportOpen(false);
+      showToast('Reporte enviado al equipo de soporte y administración.', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'No se pudo enviar el reporte.', 'error');
+    } finally {
+      setReporting(false);
+    }
+  }
 
   async function logVisit() {
     if (!session) {
@@ -142,7 +185,10 @@ function RemotePlaceDetails({
       <PlacePhoto name={name} />
       <AppText variant="body">{description}</AppText>
 
+      <SponsoredCampaignBanner placement="detail" origin={point} />
+
       <View style={styles.badgeRow}>
+        {averageRating != null ? <Badge label={`★ ${averageRating} / 5`} tone="green" /> : null}
         {estimatedCost != null ? <Badge label={`Est. Bs ${estimatedCost}`} tone="green" /> : null}
         {visitMinutes != null ? <Badge label={`${visitMinutes} min sugeridos`} tone="cream" /> : null}
         <Badge label={`${reviewsCount} reseñas`} tone="green" />
@@ -176,6 +222,29 @@ function RemotePlaceDetails({
         onPress={() => router.navigate({ pathname: '/turista/resenas', params: { placeId } })}
       />
       <Button align="left" title="Ver cupones disponibles" variant="soft" onPress={() => router.navigate('/turista/cupones')} />
+      <Button
+        align="left"
+        title={reportOpen ? 'Cancelar reporte' : 'Reportar información incorrecta'}
+        variant="secondary"
+        onPress={() => setReportOpen((v) => !v)}
+      />
+      {reportOpen ? (
+        <View style={styles.card}>
+          <AppText variant="label">¿Qué dato está desactualizado o incorrecto?</AppText>
+          <FormField
+            label="Detalle del reporte"
+            placeholder="Ej. Horario cerrado los lunes, precio actualizado a Bs 25…"
+            value={reportText}
+            onChangeText={setReportText}
+            multiline
+          />
+          <Button
+            title={reporting ? 'Enviando…' : 'Enviar reporte al administrador'}
+            disabled={reporting || !reportText.trim()}
+            onPress={() => { void submitPlaceReport(); }}
+          />
+        </View>
+      ) : null}
     </Screen>
   );
 }

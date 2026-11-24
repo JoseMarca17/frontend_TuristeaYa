@@ -1,16 +1,20 @@
-import { useCallback, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Image, StyleSheet, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 
 import { AppText } from '@/components/ui/app-text';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Chip } from '@/components/ui/chip';
 import { FormField } from '@/components/ui/form-field';
 import { ListCard } from '@/components/ui/list-card';
 import { useRemoteData } from '@/hooks/use-remote-data';
 import { listRecords, type CatalogRow } from '@/services/catalog';
+import { validateAndCompressImage, type PreparedImageAsset } from '@/services/image-upload';
 import { createRecord, deleteRecord, updateRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { useUiStore } from '@/stores/use-ui-store';
-import { spacing } from '@/theme';
+import { radius, spacing } from '@/theme';
 
 export function TicketConversation({ ticketId, isDemo = false }: { ticketId: string; isDemo?: boolean }) {
   const session = useAuthStore((s) => s.session);
@@ -19,6 +23,8 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
   const [body, setBody] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState('');
+  const [attachment, setAttachment] = useState<PreparedImageAsset | null>(null);
+  const [livePolling, setLivePolling] = useState(true);
   const [demoMessages, setDemoMessages] = useState<CatalogRow[]>([
     { id: 'demo-msg-1', sender_id: 'demo-tourist', body: 'El local no reconoce mi cupón.', created_at: new Date().toISOString() },
   ]);
@@ -37,14 +43,44 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
   );
   const { data, loading, error, retry } = useRemoteData(load);
 
+  useEffect(() => {
+    if (!livePolling || isDemo || !session) return;
+    const timer = setInterval(() => {
+      retry();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [livePolling, isDemo, session, retry]);
+
+  async function pickAttachment() {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      showToast('Permite el acceso a fotos para adjuntar evidencia.', 'error');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
+    if (res.canceled) return;
+    try {
+      const prepared = await validateAndCompressImage(res.assets[0], 0, 1);
+      setAttachment(prepared);
+      showToast('Adjunto preparado (referencia en mensaje; Render no tiene /media/tickets).', 'info');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Archivo inválido (Máx. 5 MB).', 'error');
+    }
+  }
+
   async function send() {
-    if (lock.current || !body.trim()) return;
+    if (lock.current || (!body.trim() && !attachment)) return;
+    const finalBody = attachment
+      ? `${body.trim() || 'Evidencia adjunta'} [Adjunto: ${attachment.fileName || 'captura.jpg'} · ${attachment.compressedLabel || '≤5MB'}]`
+      : body.trim();
+
     if (isDemo) {
       setDemoMessages((prev) => [
         ...prev,
-        { id: `demo-msg-${Date.now()}`, sender_id: 'demo-support', body: body.trim(), created_at: new Date().toISOString() },
+        { id: `demo-msg-${Date.now()}`, sender_id: 'demo-support', body: finalBody, created_at: new Date().toISOString() },
       ]);
       setBody('');
+      setAttachment(null);
       showToast('Mensaje enviado (Vista Demo).', 'info');
       return;
     }
@@ -55,10 +91,11 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
     try {
       await createRecord(
         'ticket-messages',
-        { ticket_id: ticketId, sender_id: session.user.id, body: body.trim() },
+        { ticket_id: ticketId, sender_id: session.user.id, body: finalBody },
         'Enviando mensaje…',
       );
       setBody('');
+      setAttachment(null);
       retry();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'No se pudo enviar.');
@@ -112,7 +149,15 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
 
   return (
     <View style={{ gap: spacing.xs + 2 }}>
-      {loading ? <AppText variant="caption">Cargando conversación…</AppText> : null}
+      <View style={styles.topRow}>
+        <Chip
+          label={livePolling ? '● Sincronización activa (5s)' : 'Pausado'}
+          selected={livePolling}
+          onPress={() => setLivePolling((v) => !v)}
+        />
+        <Badge label={loading ? 'Actualizando…' : `${data?.length ?? 0} mensajes`} tone="cream" />
+      </View>
+
       {error || notice ? <AppText accessibilityRole="alert" style={{ color: '#b91c1c' }}>{error || notice}</AppText> : null}
       {data
         ?.slice()
@@ -145,13 +190,29 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
             />
           );
         })}
+
       <FormField label="Mensaje" value={body} onChangeText={setBody} editable={!busy} maxLength={4000} multiline />
-      <Button title={busy ? 'Enviando…' : 'Enviar mensaje'} disabled={busy || !body.trim()} onPress={send} />
-      <Button title="Actualizar conversación" variant="secondary" size="sm" disabled={loading} onPress={retry} />
+      {attachment ? (
+        <View style={styles.attachRow}>
+          <Image source={{ uri: attachment.uri }} style={styles.thumb} accessibilityLabel="Evidencia adjunta" />
+          <AppText variant="caption" style={{ flex: 1 }}>{attachment.fileName || 'Captura'}</AppText>
+          <Button title="Quitar" size="sm" variant="soft" onPress={() => setAttachment(null)} />
+        </View>
+      ) : null}
+      <View style={styles.row}>
+        <View style={{ flex: 1 }}>
+          <Button title={busy ? 'Enviando…' : 'Enviar mensaje'} disabled={busy || (!body.trim() && !attachment)} onPress={send} />
+        </View>
+        <Button title="Adjuntar foto" variant="secondary" size="sm" disabled={busy} onPress={() => { void pickAttachment(); }} />
+      </View>
+      <Button title="Actualizar conversación" variant="soft" size="sm" disabled={loading} onPress={retry} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', gap: spacing.xs + 2, marginTop: 4 },
+  topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+  row: { flexDirection: 'row', gap: spacing.xs + 2, marginTop: 4, alignItems: 'center' },
+  attachRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  thumb: { width: 42, height: 42, borderRadius: radius.sm },
 });

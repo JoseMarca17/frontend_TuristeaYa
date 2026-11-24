@@ -5,7 +5,7 @@ import { StyleSheet, View } from 'react-native';
 import { EstadoCupon, TabsEstado } from '@/components/Jose/TabsEstado';
 import { CuponItem, TarjetaCupon } from '@/components/Jose/TarjetaCupon';
 import { Screen } from '@/components/layout/screen';
-import { TransactionForm } from '@/components/transactions/transaction-form';
+import { TransactionForm, type PromotionRuleInput } from '@/components/transactions/transaction-form';
 import { AppText } from '@/components/ui/app-text';
 import { Button } from '@/components/ui/button';
 import { ErrorState, LoadingState } from '@/components/ui/loading-state';
@@ -210,6 +210,8 @@ export default function PantallaCupones() {
                   kind="redeem"
                   id={item.id}
                   discountPercent={item.descuentoPct}
+                  promo={data?.promos.get(item.id)?.row as PromotionRuleInput | undefined}
+                  userRedemptionsCount={localRedemptions.filter((r) => r.promotionId === item.id).length}
                   onSuccess={handleRedeemSuccess}
                 />
               </View>

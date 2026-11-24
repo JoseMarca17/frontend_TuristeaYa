@@ -7,12 +7,16 @@ import { ReviewCard } from '@/components/ReviewCard';
 import { ReviewFilter, type FilterType } from '@/components/ReviewFilter';
 import { Screen } from '@/components/layout/screen';
 import { AppText } from '@/components/ui/app-text';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { confirmAction } from '@/components/ui/confirm-dialog';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorState, LoadingState } from '@/components/ui/loading-state';
 import { findDiscoveryPlace } from '@/features/turista/data/discovery';
 import { useRemoteData } from '@/hooks/use-remote-data';
 import { listRecords, type CatalogRow } from '@/services/catalog';
+import { MAX_REVIEW_PHOTOS } from '@/services/domain-rules';
+import { validateAndCompressImage, type PreparedImageAsset } from '@/services/image-upload';
 import { createRecord, deleteRecord, updateRecord } from '@/services/management';
 import { uploadReviewMedia } from '@/services/media';
 import { useAuthStore } from '@/stores/use-auth-store';
@@ -32,7 +36,9 @@ export function LiveReviews() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState('');
   const [editRating, setEditRating] = useState('5');
-  const [photo, setPhoto] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [photos, setPhotos] = useState<PreparedImageAsset[]>([]);
+  const [reportingReviewId, setReportingReviewId] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState('');
   const [galleryPermission, setGalleryPermission] = useState<{ granted: boolean; canAskAgain: boolean } | null>(null);
   const [cameraPermission, setCameraPermission] = useState<{ granted: boolean; canAskAgain: boolean } | null>(null);
   const lock = useRef(false);
@@ -46,7 +52,7 @@ export function LiveReviews() {
         (row) =>
           local &&
           String(row.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() ===
-            local.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(),
+          local.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(),
       );
     if (!place) return { place: undefined, rows: [] as CatalogRow[], replies: [] as CatalogRow[], media: [] as CatalogRow[] };
     const [rows, replies, media] = await Promise.all([
@@ -71,7 +77,7 @@ export function LiveReviews() {
           setCameraPermission(camera);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => { active = false; };
   }, []);
 
@@ -98,6 +104,22 @@ export function LiveReviews() {
     else setNotice('Permite el acceso a fotos o cámara desde la configuración del navegador.');
   }
 
+  async function appendValidatedAssets(assets: ImagePicker.ImagePickerAsset[]) {
+    const nextList = [...photos];
+    for (const asset of assets) {
+      try {
+        const compressed = await validateAndCompressImage(asset, nextList.length, MAX_REVIEW_PHOTOS);
+        nextList.push(compressed);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Imagen rechazada.';
+        setNotice(msg);
+        showToast(msg, 'error');
+        break;
+      }
+    }
+    setPhotos(nextList);
+  }
+
   async function publish() {
     if (!session || !data?.place || lock.current || !body.trim()) return;
     const stars = Number(rating);
@@ -114,19 +136,31 @@ export function LiveReviews() {
         { place_id: data.place.id, user_id: session.user.id, rating: stars, body: body.trim() },
         'Publicando reseña en Render…',
       )) as { id?: string };
-      let message = 'Reseña publicada.';
-      if (photo && created.id) {
-        try {
-          await uploadReviewMedia(created.id, photo);
-          message = 'Reseña y foto publicadas.';
-        } catch (uploadError) {
-          message = `Reseña publicada, pero no se pudo subir la foto: ${uploadError instanceof Error ? uploadError.message : 'revisa Storage.'}`;
+
+      let uploadedCount = 0;
+      const uploadErrors: string[] = [];
+      if (photos.length > 0 && created.id) {
+        for (const asset of photos) {
+          try {
+            await uploadReviewMedia(created.id, asset);
+            uploadedCount += 1;
+          } catch (uploadError) {
+            uploadErrors.push(uploadError instanceof Error ? uploadError.message : 'Storage no disponible');
+          }
         }
       }
+
+      const message =
+        uploadErrors.length > 0
+          ? `Reseña publicada (${uploadedCount}/${photos.length} fotos subidas: ${uploadErrors[0]}).`
+          : uploadedCount > 0
+            ? `Reseña y ${uploadedCount} foto(s) comprimidas publicadas.`
+            : 'Reseña publicada.';
+
       setBody('');
-      setPhoto(null);
+      setPhotos([]);
       setNotice(message);
-      showToast(message, 'success');
+      showToast(message, uploadErrors.length > 0 ? 'info' : 'success');
       retry();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'No se pudo publicar.');
@@ -160,6 +194,13 @@ export function LiveReviews() {
 
   async function removeReview(reviewId: string) {
     if (!session || lock.current) return;
+    const ok = await confirmAction({
+      title: 'Eliminar reseña',
+      message: '¿Eliminar permanentemente esta reseña y sus adjuntos?',
+      confirmLabel: 'Eliminar',
+      destructive: true,
+    });
+    if (!ok) return;
     lock.current = true;
     setBusy(true);
     try {
@@ -168,6 +209,35 @@ export function LiveReviews() {
       retry();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo eliminar.', 'error');
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function reportReview(reviewId: string) {
+    if (!session || !data?.place || !reportReason.trim() || lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    try {
+      await createRecord(
+        'tickets',
+        {
+          user_id: session.user.id,
+          place_id: data.place.id,
+          review_id: reviewId,
+          kind: 'review',
+          priority: 'medium',
+          subject: `Reporte de reseña en ${data.place.name}`,
+          description: reportReason.trim(),
+        },
+        'Reportando reseña para moderación…',
+      );
+      setReportingReviewId(null);
+      setReportReason('');
+      showToast('Reporte enviado al equipo de moderación.', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'No se pudo enviar el reporte.', 'error');
     } finally {
       lock.current = false;
       setBusy(false);
@@ -229,7 +299,7 @@ export function LiveReviews() {
             ))}
             {replies.map((rep) => (
               <View key={rep.id} style={styles.replyBox}>
-                <AppText variant="label" color="primary">Respuesta del negocio:</AppText>
+                <AppText variant="label" color="primary">Respuesta del comercio:</AppText>
                 <AppText variant="bodySmall">{String(rep.body)}</AppText>
               </View>
             ))}
@@ -259,6 +329,31 @@ export function LiveReviews() {
                   <Button title="Eliminar" size="sm" variant="soft" disabled={busy} onPress={() => { void removeReview(row.id); }} />
                 </View>
               )
+            ) : session ? (
+              <View style={{ gap: 6 }}>
+                <Button
+                  title={reportingReviewId === row.id ? 'Cancelar reporte' : 'Reportar reseña'}
+                  size="sm"
+                  variant="soft"
+                  onPress={() => setReportingReviewId(reportingReviewId === row.id ? null : row.id)}
+                />
+                {reportingReviewId === row.id ? (
+                  <View style={styles.editBox}>
+                    <FormField
+                      label="Motivo del reporte"
+                      placeholder="Ej. Contenido ofensivo, spam o información falsa"
+                      value={reportReason}
+                      onChangeText={setReportReason}
+                    />
+                    <Button
+                      title="Enviar reporte de moderación"
+                      size="sm"
+                      disabled={busy || !reportReason.trim()}
+                      onPress={() => { void reportReview(row.id); }}
+                    />
+                  </View>
+                ) : null}
+              </View>
             ) : null}
           </View>
         );
@@ -268,11 +363,17 @@ export function LiveReviews() {
 
       {data?.place && session ? (
         <View style={styles.card}>
-          <AppText variant="section">Escribe tu reseña</AppText>
+          <View style={styles.row}>
+            <AppText variant="section" style={{ flex: 1 }}>Escribe tu reseña</AppText>
+            <Badge label={`Máx. 5 MB por foto (${photos.length}/${MAX_REVIEW_PHOTOS})`} tone="cream" />
+          </View>
           <FormField label="Calificación (1 a 5)" value={rating} onChangeText={setRating} keyboardType="number-pad" editable={!busy} />
           <FormField label="Tu experiencia" value={body} onChangeText={setBody} maxLength={4000} multiline editable={!busy} />
+          <AppText variant="caption" color="inkSoft">
+            Formatos permitidos: JPG, PNG o WEBP · Compresión automática antes de subir.
+          </AppText>
           <AppText variant="caption">
-            Fotos: galería {galleryPermission?.granted ? 'permitida' : 'sin permiso'} · cámara {cameraPermission?.granted ? 'permitida' : 'sin permiso'}
+            Permisos: galería {galleryPermission?.granted ? 'permitida' : 'sin permiso'} · cámara {cameraPermission?.granted ? 'permitida' : 'sin permiso'}
           </AppText>
           {!galleryPermission?.granted ? <Button title="Permitir acceso a fotos" variant="secondary" size="sm" disabled={busy} onPress={() => { void requestGallery(); }} /> : null}
           {!cameraPermission?.granted ? <Button title="Permitir acceso a cámara" variant="secondary" size="sm" disabled={busy} onPress={() => { void requestCamera(); }} /> : null}
@@ -281,29 +382,52 @@ export function LiveReviews() {
           ) : null}
           <View style={styles.row}>
             <Button
-              title="Elegir foto"
+              title="Elegir fotos"
               variant="secondary"
               size="sm"
-              disabled={busy}
+              disabled={busy || photos.length >= MAX_REVIEW_PHOTOS}
               onPress={async () => {
                 if (!(galleryPermission?.granted || (await requestGallery()))) return;
-                const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.8 });
-                if (!result.canceled) setPhoto(result.assets[0]);
+                const result = await ImagePicker.launchImageLibraryAsync({
+                  mediaTypes: ['images'],
+                  allowsMultipleSelection: true,
+                  selectionLimit: MAX_REVIEW_PHOTOS - photos.length,
+                  quality: 0.85,
+                });
+                if (!result.canceled) await appendValidatedAssets(result.assets);
               }}
             />
             <Button
               title="Tomar foto"
               variant="secondary"
               size="sm"
-              disabled={busy}
+              disabled={busy || photos.length >= MAX_REVIEW_PHOTOS}
               onPress={async () => {
                 if (!(cameraPermission?.granted || (await requestCamera()))) return;
-                const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
-                if (!result.canceled) setPhoto(result.assets[0]);
+                const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.85 });
+                if (!result.canceled) await appendValidatedAssets(result.assets);
               }}
             />
           </View>
-          {photo ? <Image source={{ uri: photo.uri }} style={{ width: '100%', height: 180, borderRadius: 12 }} accessibilityLabel="Foto seleccionada para la reseña" /> : null}
+          {photos.length > 0 ? (
+            <View style={{ gap: spacing.xs }}>
+              {photos.map((photo, index) => (
+                <View key={`${photo.uri}-${index}`} style={styles.photoPreviewRow}>
+                  <Image source={{ uri: photo.uri }} style={styles.thumb} accessibilityLabel={`Foto adjunta ${index + 1}`} />
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="caption" numberOfLines={1}>{photo.fileName || `Foto ${index + 1}`}</AppText>
+                    {photo.compressedLabel ? <AppText variant="micro" color="primary">{photo.compressedLabel}</AppText> : null}
+                  </View>
+                  <Button
+                    title="Quitar"
+                    size="sm"
+                    variant="soft"
+                    onPress={() => setPhotos((prev) => prev.filter((_, i) => i !== index))}
+                  />
+                </View>
+              ))}
+            </View>
+          ) : null}
           <Button title="Publicar reseña (POST)" disabled={busy || !body.trim()} onPress={publish} />
         </View>
       ) : data?.place ? (
@@ -340,5 +464,14 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.sm,
   },
-  row: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs + 2 },
+  photoPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    padding: spacing.xs,
+    borderRadius: radius.sm,
+    backgroundColor: colors.background,
+  },
+  thumb: { width: 52, height: 52, borderRadius: radius.sm },
+  row: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs + 2, alignItems: 'center' },
 });

@@ -61,7 +61,8 @@
           "motionPermission": "TuristeaYa usa los sensores de movimiento para orientación y experiencias turísticas."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,

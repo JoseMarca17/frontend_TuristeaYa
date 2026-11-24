@@ -32,6 +32,7 @@ export function Button({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={title}
+      hitSlop={size === 'sm' ? 6 : 2}
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [
@@ -70,8 +71,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: borderWidth.hairline,
   },
-  md: { height: sizes.buttonHeight },
-  sm: { height: sizes.buttonHeightSm },
+  md: { minHeight: sizes.buttonHeight },
+  sm: { minHeight: 38 },
   primary: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,

@@ -9,12 +9,16 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { FormField } from '@/components/ui/form-field';
+import { ListCard } from '@/components/ui/list-card';
 import { ErrorState, LoadingState } from '@/components/ui/loading-state';
 import { RoleBanner } from '@/components/ui/role-banner';
 import { useRemoteData } from '@/hooks/use-remote-data';
 import { listRecords, profile } from '@/services/catalog';
+import { getVipStatusSummary } from '@/services/domain-rules';
 import { createRecord, deleteRecord, updateRecord } from '@/services/management';
 import { selectEffectiveRole, useAuthStore } from '@/stores/use-auth-store';
+import { useCouponStore } from '@/stores/use-coupon-store';
+import { useOfflineStore } from '@/stores/use-offline-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
 
@@ -26,22 +30,41 @@ export default function MiperfilScreen() {
   const refreshMeta = useAuthStore((s) => s.refreshMeta);
   const logoutStore = useAuthStore((s) => s.logout);
   const showToast = useUiStore((s) => s.showToast);
+  const localRedemptions = useCouponStore((s) => s.redemptions);
+  const offlineCount = useOfflineStore((s) => s.items.length);
 
   const [fullNameDraft, setFullNameDraft] = useState<string | null>(null);
   const [phoneDraft, setPhoneDraft] = useState<string | null>(null);
+  const [nowMs] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async (signal: AbortSignal) => {
     const categories = await listRecords('categories', { signal });
-    if (!session) return { me: null, interests: [], categories };
-    const [me, interests] = await Promise.all([
+    if (!session) return { me: null, interests: [], subscriptions: [], reservations: [], redemptions: [], categories };
+    const [me, interests, subscriptions, reservations, redemptions] = await Promise.all([
       profile(),
       listRecords('user-interests', { signal, private: true, filters: { user_id: session.user.id } }),
+      listRecords('subscriptions', { signal, private: true, filters: { user_id: session.user.id } }).catch(() => []),
+      listRecords('reservations', { signal, private: true, filters: { user_id: session.user.id } }).catch(() => []),
+      listRecords('coupon-redemptions', { signal, private: true, filters: { user_id: session.user.id } }).catch(() => []),
     ]);
-    return { me, interests: interests.filter((row) => row.user_id === session.user.id), categories };
+    return {
+      me,
+      interests: interests.filter((row) => row.user_id === session.user.id),
+      subscriptions: subscriptions.filter((row) => row.user_id === session.user.id),
+      reservations: reservations.filter((row) => row.user_id === session.user.id),
+      redemptions: redemptions.filter((row) => row.user_id === session.user.id),
+      categories,
+    };
   }, [session]);
 
   const { data, loading, error, retry } = useRemoteData(load);
+  const vipSummary = getVipStatusSummary(
+    (data?.subscriptions || []) as { id: string; user_id: string; status?: string; starts_at?: string; ends_at?: string }[],
+    session?.user.id,
+    nowMs,
+    !session && demoRole === 'vip',
+  );
   const fullName = fullNameDraft ?? data?.me?.full_name ?? '';
   const phone = phoneDraft ?? data?.me?.phone ?? '';
 
@@ -144,6 +167,37 @@ export default function MiperfilScreen() {
           </View>
         </View>
       ) : null}
+
+      <View style={styles.card}>
+        <View style={styles.rowBetween}>
+          <AppText variant="section">Historial y beneficios</AppText>
+          <Badge
+            label={vipSummary.active ? `VIP (${vipSummary.daysRemaining}d)` : vipSummary.isExpired ? 'VIP expirado' : 'Plan estándar'}
+            tone={vipSummary.active ? 'green' : 'cream'}
+          />
+        </View>
+        <AppText variant="caption" color="inkSoft">
+          {vipSummary.active
+            ? 'Suscripción VIP vigente: anuncios ocultos, descargas offline y reservas exclusivas habilitadas.'
+            : vipSummary.isExpired
+              ? 'Tu suscripción VIP expiró; las funciones exclusivas quedan bloqueadas automáticamente hasta renovar.'
+              : 'Activa VIP para ocultar anuncios, usar descargas SQLite offline y acceder a experiencias exclusivas.'}
+        </AppText>
+        <View style={styles.chipWrap}>
+          <Badge label={`${data?.subscriptions.length ?? 0} suscripciones`} tone="cream" />
+          <Badge label={`${data?.reservations.length ?? 0} reservas`} tone="cream" />
+          <Badge label={`${(data?.redemptions.length ?? 0) || localRedemptions.length} canjes`} tone="cream" />
+          <Badge label={`${offlineCount} rutas offline`} tone="green" />
+        </View>
+        {data?.subscriptions.slice(0, 2).map((sub) => (
+          <ListCard
+            key={sub.id}
+            title={`Suscripción ${String(sub.status || 'activa')}`}
+            body={sub.ends_at ? `Vigencia hasta ${new Date(String(sub.ends_at)).toLocaleDateString()}` : 'Sin fecha de expiración'}
+          />
+        ))}
+        <Button title="Ver historial completo en Mi cuenta" size="sm" variant="secondary" onPress={() => router.navigate('/turista/cuenta')} />
+      </View>
 
       <View style={styles.card}>
         <AppText variant="section">Módulos de la plataforma</AppText>

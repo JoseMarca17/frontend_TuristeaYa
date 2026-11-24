@@ -90,6 +90,7 @@ export default function RutasDisponiblesScreen() {
   const [newMinutes, setNewMinutes] = useState('150');
   const [newVisibility, setNewVisibility] = useState<'public' | 'private'>('private');
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const load = useCallback(
@@ -156,20 +157,21 @@ export default function RutasDisponiblesScreen() {
 
   async function handleCreateRoute() {
     if (!session) {
-      if (demoRole) {
-        showToast('Vista Demo: inicia sesión real en Render para crear rutas persistentes.', 'info');
-      } else {
-        router.navigate('/login');
-      }
+      setCreateError(
+        demoRole
+          ? 'Estás en Vista Demo local. Para guardar con POST real en Render entra con una cuenta real en Iniciar sesión.'
+          : 'Inicia sesión para crear rutas en Render.',
+      );
       return;
     }
     const budgetNum = Number(newBudget.replace(',', '.'));
     const minsNum = Number(newMinutes.replace(',', '.'));
     if (!newName.trim() || !Number.isFinite(budgetNum) || budgetNum < 0 || !Number.isFinite(minsNum) || minsNum <= 0) {
-      showToast('Completa un nombre, presupuesto válido y duración mayor a 0.', 'error');
+      setCreateError('Completa un nombre, presupuesto válido (0 o mayor) y duración mayor a 0.');
       return;
     }
     setCreating(true);
+    setCreateError('');
     try {
       const created = await createRecord<{ id: string }>(
         'routes',
@@ -193,7 +195,9 @@ export default function RutasDisponiblesScreen() {
         retry();
       }
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'No se pudo crear la ruta.', 'error');
+      const msg = err instanceof Error ? err.message : 'No se pudo crear la ruta.';
+      setCreateError(msg);
+      showToast(msg, 'error');
     } finally {
       setCreating(false);
     }
@@ -603,7 +607,8 @@ export default function RutasDisponiblesScreen() {
                       <Chip label="Pública (catálogo)" selected={newVisibility === 'public'} onPress={() => setNewVisibility('public')} />
                     </View>
                   </View>
-                  <Button title={creating ? 'Creando…' : 'Crear ruta y añadir paradas'} disabled={creating} onPress={() => { void handleCreateRoute(); }} />
+                  {createError ? <AppText accessibilityRole="alert" variant="caption" style={{ color: '#b91c1c' }}>{createError}</AppText> : null}
+                  <Button title={creating ? 'Creando en Render…' : 'Crear ruta y añadir paradas'} disabled={creating} onPress={() => { void handleCreateRoute(); }} />
                 </>
               )}
             </ScrollView>

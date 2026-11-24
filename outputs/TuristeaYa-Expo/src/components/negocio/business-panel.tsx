@@ -4,16 +4,25 @@ import { useCallback, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Pantalla, TABS_NEGOCIO } from './Ui';
+import { BusinessWizard } from './business-wizard';
 import { AppText } from '@/components/ui/app-text';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
+import { confirmAction } from '@/components/ui/confirm-dialog';
 import { FormField } from '@/components/ui/form-field';
 import { ListCard } from '@/components/ui/list-card';
 import { ErrorState, LoadingState } from '@/components/ui/loading-state';
 import { RoleBanner } from '@/components/ui/role-banner';
 import { useRemoteData } from '@/hooks/use-remote-data';
 import { listRecords, type CatalogRow } from '@/services/catalog';
+import {
+  aggregateCampaignHourlyTraffic,
+  canManageBusiness,
+  normalizeCampaignStatus,
+  parseCouponVerificationCode,
+} from '@/services/domain-rules';
+import { validateAndCompressImage } from '@/services/image-upload';
 import { createRecord, deleteRecord, updateRecord } from '@/services/management';
 import { uploadPlaceMedia } from '@/services/media';
 import {
@@ -116,7 +125,7 @@ function BusinessEditor({
   businessId: string;
   places: CatalogRow[];
   zones: CatalogRow[];
-  onSaved: () => void;
+  onSaved: (demoRow?: CatalogRow, isEdit?: boolean) => void;
   onCancel?: () => void;
   isDemo?: boolean;
 }) {
@@ -153,11 +162,6 @@ function BusinessEditor({
 
   async function save() {
     if (lock.current) return;
-    if (isDemo) {
-      showToast('Operación simulada en Vista Demo Negocio.', 'info');
-      onSaved();
-      return;
-    }
     lock.current = true;
     setBusy(true);
     setNotice('');
@@ -199,6 +203,17 @@ function BusinessEditor({
       }
       if (mode === 'promotions' && !row) {
         payload.status = 'active';
+      }
+
+      if (isDemo) {
+        const demoRow: CatalogRow = {
+          id: row?.id || `demo-${Date.now()}`,
+          business_id: businessId,
+          ...payload,
+        };
+        showToast('Guardado en Vista Demo local (en Render requiere cuenta real).', 'info');
+        onSaved(demoRow, Boolean(row));
+        return;
       }
 
       if (row) {
@@ -256,9 +271,12 @@ function BusinessEditor({
             ))}
           </View>
           {!places.length ? (
-            <AppText variant="caption" style={{ color: '#b91c1c' }}>
-              Primero crea un lugar en la pestaña «Lugares».
-            </AppText>
+            <View style={{ gap: 6 }}>
+              <AppText variant="caption" style={{ color: '#b91c1c' }}>
+                Primero crea un lugar en «Mis lugares» (en el panel Resumen → Lugares) para poder asociarlo aquí.
+              </AppText>
+              <Button title="Ir a crear un lugar" size="sm" variant="secondary" onPress={() => router.navigate('/RamaNegocio')} />
+            </View>
           ) : null}
         </>
       ) : null}
@@ -296,8 +314,14 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
   const [newBizEmail, setNewBizEmail] = useState('');
   const [newBizPhone, setNewBizPhone] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [qrInput, setQrInput] = useState('');
+  const [qrCheckResult, setQrCheckResult] = useState('');
+  const [wizardOpen, setWizardOpen] = useState(initialMode === 'verification');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [demoAdded, setDemoAdded] = useState<Record<string, CatalogRow[]>>({});
+  const [demoPatched, setDemoPatched] = useState<Record<string, Record<string, CatalogRow>>>({});
+  const [demoDeleted, setDemoDeleted] = useState<string[]>([]);
   const lock = useRef(false);
 
   const isDemo = !session && demoRole === 'advertiser';
@@ -417,6 +441,15 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
   );
 
   const { data, loading, error, retry } = useRemoteData(load);
+  const deletedSet = new Set(demoDeleted);
+  const patches = demoPatched[mode] || {};
+  const visibleRows = data
+    ? isDemo
+      ? [...(demoAdded[mode] || []), ...data.rows]
+        .filter((r) => !deletedSet.has(r.id))
+        .map((r) => patches[r.id] ?? r)
+      : data.rows
+    : [];
 
   async function createBusiness() {
     if (!session || lock.current || !newBizName.trim()) return;
@@ -449,6 +482,13 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
 
   async function deleteBusiness(id: string) {
     if (isDemo || lock.current) return;
+    const ok = await confirmAction({
+      title: 'Eliminar establecimiento',
+      message: 'Esta acción eliminará el negocio de Render si no tiene verificaciones activas. ¿Continuar?',
+      confirmLabel: 'Eliminar',
+      destructive: true,
+    });
+    if (!ok) return;
     lock.current = true;
     setBusy(true);
     try {
@@ -467,6 +507,10 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
 
   async function changeStatus(row: CatalogRow, patch: Record<string, unknown>) {
     if (isDemo) {
+      setDemoPatched((prev) => ({
+        ...prev,
+        [mode]: { ...(prev[mode] || {}), [row.id]: { ...row, ...patch } },
+      }));
       showToast('Estado cambiado en Vista Demo.', 'info');
       return;
     }
@@ -488,6 +532,7 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
 
   async function removeRow(entity: string, id: string) {
     if (isDemo) {
+      setDemoDeleted((prev) => [...prev, id]);
       setConfirmDeleteId(null);
       showToast('Eliminación simulada en Vista Demo.', 'info');
       return;
@@ -516,14 +561,35 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
     if (picked.canceled) return;
     setBusy(true);
     try {
-      await uploadPlaceMedia(placeId, picked.assets[0]);
-      showToast('Foto del lugar subida a Render.', 'success');
+      const prepared = await validateAndCompressImage(picked.assets[0], 0, 5);
+      await uploadPlaceMedia(placeId, prepared);
+      showToast('Foto comprimida y subida a Render (Máx. 5 MB).', 'success');
       retry();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo subir la foto.', 'error');
     } finally {
       setBusy(false);
     }
+  }
+
+  function verifyScannedCoupon(promoRows: CatalogRow[]) {
+    const parsed = parseCouponVerificationCode(qrInput);
+    if (!parsed.validFormat) {
+      setQrCheckResult('Código inválido: escribe o pega un código de cupón o voucher TYA-VOUCHER|...');
+      return;
+    }
+    const found = promoRows.find((p) => String(p.code || '').toUpperCase() === parsed.code);
+    if (!found) {
+      setQrCheckResult(`Código inválido (${parsed.code}): no corresponde a ninguna promoción de este comercio.`);
+      return;
+    }
+    const status = String(found.status || 'active').toLowerCase();
+    const expired = found.ends_at && Date.parse(String(found.ends_at)) < Date.now();
+    if (status !== 'active' || expired) {
+      setQrCheckResult(`Cupón no vigente (${parsed.code}): estado ${status}${expired ? ' · vencido' : ''}.`);
+      return;
+    }
+    setQrCheckResult(`✓ Cupón VÁLIDO: "${found.title}" (-${found.discount_percent}%). Ref: ${parsed.ref || 'directo'}`);
   }
 
   async function addOpeningHour(placeId: string) {
@@ -635,7 +701,7 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
         </View>
       ) : null}
 
-      {data?.business ? (
+      {data?.business && (isDemo || canManageBusiness(session?.user.id, 'advertiser', String(data.business.owner_id))) ? (
         <>
           {mode === 'summary' ? (
             <View style={styles.editorCard}>
@@ -647,6 +713,7 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
                 {String(data.business.contact_email || 'Sin correo')} · {String(data.business.phone || 'Sin teléfono')}
               </AppText>
               <View style={styles.quickNav}>
+                <Button title={wizardOpen ? 'Ocultar asistente 3 pasos' : 'Asistente 3 pasos'} size="sm" onPress={() => setWizardOpen((v) => !v)} />
                 <Button title="Gestionar lugares" size="sm" onPress={() => setSubMode('places')} />
                 <Button title="Promociones" size="sm" variant="secondary" onPress={() => router.navigate('/RamaNegocio/promociones')} />
                 <Button title="Experiencias" size="sm" variant="secondary" onPress={() => setSubMode('experiences')} />
@@ -655,6 +722,35 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
                 <Button title="Verificación" size="sm" variant="secondary" onPress={() => router.navigate('/RamaNegocio/verificar')} />
                 <Button title="Ayuda" size="sm" variant="soft" onPress={() => router.navigate('/RamaNegocio/ayuda')} />
               </View>
+            </View>
+          ) : null}
+
+          {wizardOpen || mode === 'verification' ? (
+            <BusinessWizard
+              key={`wiz-${data.business.id}`}
+              business={data.business}
+              existingPlace={data.places[0]}
+              zones={data.zones}
+              verifications={mode === 'verification' ? data.rows : []}
+              isDemo={isDemo}
+              onSaved={() => {
+                setWizardOpen(false);
+                retry();
+              }}
+            />
+          ) : null}
+
+          {mode === 'promotions' ? (
+            <View style={styles.editorCard}>
+              <AppText variant="section">Validar código o voucher QR en local</AppText>
+              <FormField
+                label="Código del cupón o voucher QR escaneado"
+                placeholder="Ej. PACENO2026 o TYA-VOUCHER|PACENO2026|12AB"
+                value={qrInput}
+                onChangeText={setQrInput}
+              />
+              <Button title="Verificar cupón" size="sm" variant="secondary" onPress={() => verifyScannedCoupon(data.rows)} />
+              {qrCheckResult ? <AppText variant="bodySmall" color="primary">{qrCheckResult}</AppText> : null}
             </View>
           ) : null}
 
@@ -700,12 +796,30 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
               places={data.places}
               zones={data.zones}
               isDemo={isDemo}
-              onSaved={() => { setEdit(null); retry(); }}
+              onSaved={(demoRow, isEdit) => {
+                if (isDemo && demoRow) {
+                  if (isEdit) {
+                    setDemoPatched((prev) => ({
+                      ...prev,
+                      [mode]: { ...(prev[mode] || {}), [demoRow.id]: demoRow },
+                    }));
+                  } else {
+                    setDemoAdded((prev) => ({
+                      ...prev,
+                      [mode]: [demoRow, ...(prev[mode] || [])],
+                    }));
+                  }
+                  setEdit(null);
+                  return;
+                }
+                setEdit(null);
+                retry();
+              }}
               onCancel={() => setEdit(null)}
             />
           ) : null}
 
-          {data.rows.map((row) => (
+          {visibleRows.map((row) => (
             <ListCard
               key={row.id}
               title={String(row.title || row.name || row.responsible_name || row.body || 'Registro')}
@@ -781,9 +895,13 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
                     </View>
                   ) : null}
                   {mode === 'campaigns' ? (
-                    <AppText variant="micro" color="inkSoft">
-                      Eventos registrados: {(data.campaignEvents ?? []).filter((ev) => ev.campaign_id === row.id).length}
-                    </AppText>
+                    <CampaignStatsCard
+                      row={row}
+                      events={(data.campaignEvents ?? []).filter((ev) => ev.campaign_id === row.id)}
+                      onAutoPause={(statusValue) => {
+                        void changeStatus(row, { status: statusValue });
+                      }}
+                    />
                   ) : null}
                   {mode === 'notifications' && !row.read_at ? (
                     <Button
@@ -818,7 +936,7 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
             />
           ))}
 
-          {!data.rows.length && !['summary', 'data'].includes(mode) ? (
+          {!data.rows.length && !(demoAdded[mode]?.length) && !['summary', 'data'].includes(mode) ? (
             <AppText variant="bodySmall" color="inkSoft">Sin registros todavía en esta sección.</AppText>
           ) : null}
         </>
@@ -826,6 +944,63 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
 
       <Button title="Actualizar" variant="secondary" disabled={loading || busy} onPress={retry} />
     </Pantalla>
+  );
+}
+
+function CampaignStatsCard({
+  row,
+  events,
+  onAutoPause,
+}: {
+  row: CatalogRow;
+  events: CatalogRow[];
+  onAutoPause: (nextStatus: 'finished' | 'exhausted') => void;
+}) {
+  const impressions = events.filter((e) => e.kind === 'impression').length;
+  const clicks = events.filter((e) => e.kind === 'click' || e.kind === 'open').length;
+  const conversions = events.filter((e) => e.kind === 'conversion' || e.kind === 'route' || e.kind === 'visit').length;
+  const estSpent = Math.round((impressions * 0.25 + clicks * 1.5 + conversions * 4) * 100) / 100;
+  const lifecycle = normalizeCampaignStatus(String(row.status || 'DRAFT'), {
+    budget: Number(row.budget ?? 0),
+    spentAmount: estSpent,
+    startsAt: row.starts_at ? String(row.starts_at) : null,
+    endsAt: row.ends_at ? String(row.ends_at) : null,
+  });
+  const traffic = aggregateCampaignHourlyTraffic(
+    events as { kind?: string | null; occurred_at?: string | null; created_at?: string | null }[],
+  );
+  const days = row.starts_at && row.ends_at
+    ? Math.max(1, Math.ceil((Date.parse(String(row.ends_at)) - Date.parse(String(row.starts_at))) / 86400000))
+    : 30;
+  const dailyBudget = Math.round((Number(row.budget ?? 0) / days) * 100) / 100;
+
+  return (
+    <View style={{ width: '100%', gap: 4, marginTop: 4 }}>
+      <View style={styles.chipRow}>
+        <Badge label={`Estado: ${lifecycle.status}`} tone={lifecycle.status === 'ACTIVE' ? 'green' : 'cream'} />
+        <Badge label={`Saldo restante: Bs ${lifecycle.remainingBudget}`} tone="cream" />
+        <Badge label={`Diario est.: Bs ${dailyBudget}/día`} tone="cream" />
+      </View>
+      <AppText variant="micro" color="inkSoft">
+        Impresiones: {impressions} · Clics/Aperturas: {clicks} · Conversiones: {conversions} · Pico horario: {traffic.peakHourLabel}
+      </AppText>
+      {traffic.buckets.slice(0, 5).map((b) => (
+        <AppText key={b.hourLabel} variant="micro" color="primary">
+          {b.hourLabel}: {b.impressions} imp · {b.clicks} clics · {b.conversions} conv
+        </AppText>
+      ))}
+      {lifecycle.shouldAutoPause ? (
+        <Button
+          title="Pausar por presupuesto agotado / finalizado"
+          size="sm"
+          variant="soft"
+          onPress={() => onAutoPause(lifecycle.status === 'FINISHED' ? 'finished' : 'exhausted')}
+        />
+      ) : null}
+      <AppText variant="micro" color="inkMuted">
+        Nota: la contratación y cobro real de pauta requiere configurar pasarela de pagos en servidor; los anuncios se ocultan automáticamente a turistas VIP.
+      </AppText>
+    </View>
   );
 }
 
@@ -921,6 +1096,9 @@ function ReviewReply({
         </View>
       ))}
       <FormField label="Respuesta del negocio" value={body} onChangeText={setBody} editable={!busy} />
+      <AppText variant="micro" color="inkMuted">
+        Nota: la API actual (/review-replies) guarda texto; el endpoint para adjuntar imágenes en respuestas de comercio no está desplegado en Render.
+      </AppText>
       <Button title="Publicar respuesta" size="sm" disabled={busy || !body.trim()} onPress={send} />
     </View>
   );

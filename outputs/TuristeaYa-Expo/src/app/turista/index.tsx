@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Screen } from '@/components/layout/screen';
+import { SponsoredCampaignBanner } from '@/components/ads/sponsored-banner';
 import { AppText } from '@/components/ui/app-text';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,7 @@ export default function InicioScreen() {
   const { readNotices } = useDiscovery();
   const { routes } = useRoutes();
   const session = useAuthStore((s) => s.session);
+  const hasActiveVip = useAuthStore((s) => s.hasActiveVip);
   const activeCoupon = useCouponStore((s) => s.activeCoupon);
   const resetFilters = useRouteFilterStore((s) => s.resetFilters);
   const applyFilters = useRouteFilterStore((s) => s.applyFilters);
@@ -79,6 +81,23 @@ export default function InicioScreen() {
       }
     >
       <RoleBanner />
+
+      <SponsoredCampaignBanner
+        placement="home"
+        origin={
+          location.latitude != null && location.longitude != null
+            ? { latitude: location.latitude, longitude: location.longitude }
+            : null
+        }
+      />
+
+      {hasActiveVip ? (
+        <ListCard
+          title="Membresía VIP activa · Sin anuncios"
+          body="Alertas tempranas activadas, descargas offline SQLite y rutas avanzadas de múltiples paradas."
+          onPress={() => router.navigate('/vip')}
+        />
+      ) : null}
 
       {/* Cupón canjeado activo si existe */}
       {activeCoupon ? (

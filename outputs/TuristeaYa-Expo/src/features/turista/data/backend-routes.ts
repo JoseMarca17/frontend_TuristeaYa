@@ -58,6 +58,9 @@ export type BackendPlannedRoute = {
   userId: string;
   isMine: boolean;
   visibility: 'public' | 'private';
+  shareSlug?: string;
+  preference?: string;
+  createdAt?: string;
   name: string;
   placeIds: string[];
   categories: PlaceCategory[];
@@ -211,6 +214,9 @@ function buildRoutes(
         userId,
         isMine,
         visibility,
+        shareSlug: route.share_slug ? String(route.share_slug) : undefined,
+        preference: route.preference ? String(route.preference) : undefined,
+        createdAt: route.created_at ? String(route.created_at) : undefined,
         name: textValue(route.name, 'Ruta sin nombre'),
         placeIds: placesInRoute.map((place) => place.id),
         categories,

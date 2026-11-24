@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 
 import { Screen } from '@/components/layout/screen';
@@ -7,25 +7,42 @@ import { AppText } from '@/components/ui/app-text';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
+import { confirmAction } from '@/components/ui/confirm-dialog';
 import { FormField } from '@/components/ui/form-field';
 import { ListCard } from '@/components/ui/list-card';
 import { ErrorState, LoadingState } from '@/components/ui/loading-state';
 import { RoleBanner } from '@/components/ui/role-banner';
 import { useRemoteData } from '@/hooks/use-remote-data';
 import { listRecords, type CatalogRow } from '@/services/catalog';
+import {
+  buildCouponNotificationMetadata,
+  TICKET_PRIORITY_OPTIONS,
+  TICKET_STATUS_OPTIONS,
+} from '@/services/domain-rules';
 import { createRecord, deleteRecord, requireRole, updateRecord } from '@/services/management';
 import { tickets as demoTickets } from '@/services/mock/support';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { useUiStore } from '@/stores/use-ui-store';
-import { colors, spacing } from '@/theme';
+import { colors, radius, spacing } from '@/theme';
 import { TicketConversation } from './ticket-conversation';
 
 const statusLabels: Record<string, string> = {
   all: 'Todos',
+  open: 'Abierto',
   pending: 'Pendiente',
-  in_progress: 'En atención',
+  in_progress: 'En proceso',
+  waiting_user: 'Esperando usuario',
   resolved: 'Resuelto',
   closed: 'Cerrado',
+};
+
+const kindLabels: Record<string, string> = {
+  all: 'Todos los tipos',
+  coupon: 'Disputas cupones',
+  review: 'Reportes reseñas',
+  other: 'Generales / Lugares',
+  route: 'Rutas',
+  account: 'Cuenta / VIP',
 };
 
 export function SupportPanel() {
@@ -35,28 +52,45 @@ export function SupportPanel() {
 
   const [selected, setSelected] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [kindFilter, setKindFilter] = useState<string>('all');
   const [notifyText, setNotifyText] = useState('');
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [historyUserId, setHistoryUserId] = useState<string | null>(null);
+  const [userHistory, setUserHistory] = useState<{
+    name: string;
+    tickets: number;
+    redemptions: number;
+    reservations: number;
+    routes: number;
+  } | null>(null);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
 
   const isDemo = !session && (demoRole === 'support' || demoRole === 'admin');
 
-  const load = useCallback(async (signal: AbortSignal): Promise<CatalogRow[]> => {
+  const load = useCallback(async (signal: AbortSignal) => {
     if (isDemo) {
-      return demoTickets.map((t) => ({
-        id: t.id,
-        user_id: 'demo-tourist',
-        subject: t.subject,
-        description: t.verification,
-        status: t.status === 'Pendiente' ? 'pending' : t.status === 'En curso' ? 'in_progress' : 'resolved',
-        priority: t.priority === 'Alta' ? 'high' : t.priority === 'Media' ? 'medium' : 'low',
-      }));
+      return {
+        tickets: demoTickets.map((t, idx) => ({
+          id: t.id,
+          user_id: 'demo-tourist',
+          redemption_id: idx === 0 ? 'demo-redemption-1' : null,
+          kind: idx === 0 ? 'coupon' : 'other',
+          subject: t.subject,
+          description: t.verification,
+          status: t.status === 'Pendiente' ? 'pending' : t.status === 'En curso' ? 'in_progress' : 'resolved',
+          priority: t.priority === 'Alta' ? 'high' : t.priority === 'Media' ? 'medium' : 'low',
+        })) as CatalogRow[],
+        audits: [] as CatalogRow[],
+      };
     }
     if (!session) throw new Error('Inicia sesión con una cuenta de soporte o administrador.');
     await requireRole(['admin', 'support'], signal);
-    return listRecords('tickets', { private: true, signal });
+    const [tickets, audits] = await Promise.all([
+      listRecords('tickets', { private: true, signal }),
+      listRecords('audit-logs', { private: true, signal }).catch(() => []),
+    ]);
+    return { tickets, audits };
   }, [session, isDemo]);
 
   const { data, loading, error, retry } = useRemoteData(load);
@@ -82,9 +116,82 @@ export function SupportPanel() {
     }
   }
 
-  async function removeTicket(id: string) {
+  async function loadUserHistory(userId: string) {
+    if (historyUserId === userId) {
+      setHistoryUserId(null);
+      setUserHistory(null);
+      return;
+    }
     if (isDemo) {
-      setConfirmDeleteId(null);
+      setHistoryUserId(userId);
+      setUserHistory({ name: 'María Turista Demo', tickets: 2, redemptions: 3, reservations: 1, routes: 4 });
+      return;
+    }
+    setBusy(true);
+    try {
+      const [profiles, tks, reds, resv, rts] = await Promise.all([
+        listRecords('profiles', { private: true }).catch(() => []),
+        listRecords('tickets', { private: true, filters: { user_id: userId } }).catch(() => []),
+        listRecords('coupon-redemptions', { private: true, filters: { user_id: userId } }).catch(() => []),
+        listRecords('reservations', { private: true, filters: { user_id: userId } }).catch(() => []),
+        listRecords('routes', { private: true, filters: { user_id: userId } }).catch(() => []),
+      ]);
+      const prof = profiles.find((p) => p.id === userId);
+      setHistoryUserId(userId);
+      setUserHistory({
+        name: String(prof?.full_name || userId.slice(0, 8)),
+        tickets: tks.filter((x) => x.user_id === userId).length,
+        redemptions: reds.filter((x) => x.user_id === userId).length,
+        reservations: resv.filter((x) => x.user_id === userId).length,
+        routes: rts.filter((x) => x.user_id === userId).length,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveCouponDispute(ticket: CatalogRow, approved: boolean) {
+    if (isDemo) {
+      showToast(`Disputa ${approved ? 'aprobada' : 'rechazada'} y notificada (Vista Demo).`, 'info');
+      return;
+    }
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    try {
+      const status = 'resolved';
+      const meta = buildCouponNotificationMetadata({
+        redemption_id: ticket.redemption_id ? String(ticket.redemption_id) : null,
+        error_code: approved ? null : 'DISPUTE_REJECTED',
+        error_reason: approved ? 'Disputa aprobada por Soporte' : 'Disputa rechazada por Soporte',
+        severity: approved ? 'info' : 'warning',
+      });
+      await updateRecord('tickets', ticket.id, { status }, 'Resolviendo disputa de cupón…');
+      await createRecord('notifications', {
+        user_id: ticket.user_id,
+        ticket_id: ticket.id,
+        title: approved ? 'Disputa de cupón aprobada' : 'Resolución de disputa de cupón',
+        body: `${approved ? 'Soporte validó tu canje.' : 'Tu disputa fue cerrada sin ajuste.'} ${JSON.stringify(meta)}`,
+      }).catch(() => {});
+      showToast('Disputa resuelta y notificada.', 'success');
+      retry();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'No se pudo resolver la disputa.', 'error');
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function removeTicket(id: string) {
+    const ok = await confirmAction({
+      title: 'Eliminar ticket',
+      message: '¿Eliminar este ticket de soporte permanentemente?',
+      confirmLabel: 'Eliminar',
+      destructive: true,
+    });
+    if (!ok) return;
+    if (isDemo) {
       showToast('Eliminación simulada en Vista Demo.', 'info');
       return;
     }
@@ -93,7 +200,6 @@ export function SupportPanel() {
     setBusy(true);
     try {
       await deleteRecord('tickets', id, 'Eliminando ticket…');
-      setConfirmDeleteId(null);
       showToast('Ticket eliminado de Render.', 'success');
       retry();
     } catch (err) {
@@ -108,7 +214,7 @@ export function SupportPanel() {
     if (!notifyText.trim()) return;
     if (isDemo) {
       setNotifyText('');
-      showToast('Notificación enviada (Vista Demo).', 'info');
+      showToast('Notificación enviada al usuario y comercio (Vista Demo).', 'info');
       return;
     }
     if (lock.current) return;
@@ -122,7 +228,6 @@ export function SupportPanel() {
           ticket_id: ticket.id,
           title: `Actualización sobre: ${ticket.subject}`,
           body: notifyText.trim(),
-          kind: 'support',
         },
         'Enviando notificación al usuario…',
       );
@@ -136,107 +241,155 @@ export function SupportPanel() {
     }
   }
 
-  const filtered = (data ?? []).filter((t) => statusFilter === 'all' || t.status === statusFilter);
+  const tickets = data?.tickets ?? [];
+  const filtered = tickets.filter((t) => {
+    const statusOk = statusFilter === 'all' || t.status === statusFilter;
+    const rawKind = String(t.kind || 'other');
+    const kindOk = kindFilter === 'all' || rawKind === kindFilter || (kindFilter === 'coupon' && rawKind === 'coupon_dispute');
+    return statusOk && kindOk;
+  });
 
   return (
-    <Screen title="Tickets de soporte" subtitle="Atención, seguimiento y respuestas en Render">
+    <Screen title="Tickets de soporte" subtitle="Atención, disputas de cupones y seguimiento en tiempo real">
       <RoleBanner />
 
-      <View style={styles.chipRow}>
-        {(['all', 'pending', 'in_progress', 'resolved', 'closed'] as const).map((key) => (
-          <Chip key={key} label={statusLabels[key]} selected={statusFilter === key} onPress={() => setStatusFilter(key)} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+        {Object.entries(kindLabels).map(([key, label]) => (
+          <Chip key={key} label={label} selected={kindFilter === key} onPress={() => setKindFilter(key)} />
         ))}
-      </View>
+      </ScrollView>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+        {(['all', ...TICKET_STATUS_OPTIONS] as const).map((key) => (
+          <Chip key={key} label={statusLabels[key] || key} selected={statusFilter === key} onPress={() => setStatusFilter(key)} />
+        ))}
+      </ScrollView>
 
       {!session && !isDemo ? <Button title="Iniciar sesión" onPress={() => router.navigate('/login')} /> : null}
       {loading ? <LoadingState label="Cargando casos de soporte…" /> : null}
       {error ? <ErrorState message={error} onRetry={retry} /> : null}
       {notice ? <AppText accessibilityRole="alert" style={{ color: '#b91c1c' }}>{notice}</AppText> : null}
-      {!loading && !error && !filtered.length ? <AppText>No hay casos en este estado.</AppText> : null}
+      {!loading && !error && !filtered.length ? <AppText>No hay casos con los filtros actuales.</AppText> : null}
 
-      {filtered.map((ticket) => (
-        <ListCard
-          key={ticket.id}
-          title={String(ticket.subject)}
-          body={`${ticket.status} · ${ticket.priority}\n${ticket.description || ''}`}
-          footer={
-            <View style={{ gap: spacing.xs + 2, marginTop: 4 }}>
-              <View style={styles.chipRow}>
-                <Badge label={`Estado: ${ticket.status}`} tone={ticket.status === 'resolved' ? 'green' : 'cream'} />
-                <Badge label={`Prioridad: ${ticket.priority}`} tone="green" />
-              </View>
-              <Button
-                title={selected === ticket.id ? 'Cerrar conversación' : 'Ver conversación'}
-                onPress={() => setSelected(selected === ticket.id ? null : ticket.id)}
-              />
-              {selected === ticket.id ? (
-                <View style={styles.detailBox}>
-                  <TicketConversation key={`${session?.user.id || 'demo'}-${ticket.id}`} ticketId={ticket.id} isDemo={isDemo} />
-
-                  <AppText variant="label">Cambiar estado (PATCH)</AppText>
-                  <View style={styles.chipRow}>
-                    {['pending', 'in_progress', 'resolved'].map((status, index) => (
-                      <Button
-                        key={status}
-                        size="sm"
-                        title={['Dejar pendiente', 'Marcar en atención', 'Resolver caso'][index]}
-                        disabled={busy || ticket.status === status}
-                        onPress={() => { void patchTicket(ticket.id, { status }, `Ticket actualizado a ${status}.`); }}
-                      />
-                    ))}
-                  </View>
-
-                  <AppText variant="label">Prioridad y asignación</AppText>
-                  <View style={styles.chipRow}>
-                    {(['low', 'medium', 'high'] as const).map((p) => (
-                      <Button
-                        key={p}
-                        size="sm"
-                        variant="secondary"
-                        title={`Prioridad: ${p}`}
-                        disabled={busy || ticket.priority === p}
-                        onPress={() => { void patchTicket(ticket.id, { priority: p }, `Prioridad cambiada a ${p}.`); }}
-                      />
-                    ))}
-                    {session ? (
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        title="Asignarme caso"
-                        disabled={busy || ticket.assigned_to === session.user.id}
-                        onPress={() => { void patchTicket(ticket.id, { assigned_to: session.user.id }, 'Caso asignado a tu usuario.'); }}
-                      />
-                    ) : null}
-                  </View>
-
-                  <FormField
-                    label="Notificar al usuario (POST /notifications)"
-                    value={notifyText}
-                    onChangeText={setNotifyText}
-                    placeholder="Ej. Ya revisamos tu caso."
-                  />
-                  <Button
-                    title="Enviar notificación"
-                    size="sm"
-                    variant="secondary"
-                    disabled={busy || !notifyText.trim()}
-                    onPress={() => { void sendUserNotification(ticket); }}
-                  />
-
-                  {confirmDeleteId === ticket.id ? (
-                    <View style={styles.chipRow}>
-                      <Button title="Confirmar eliminar" size="sm" disabled={busy} onPress={() => { void removeTicket(ticket.id); }} />
-                      <Button title="Cancelar" size="sm" variant="secondary" onPress={() => setConfirmDeleteId(null)} />
-                    </View>
-                  ) : (
-                    <Button title="Eliminar ticket (DELETE)" size="sm" variant="soft" disabled={busy} onPress={() => setConfirmDeleteId(ticket.id)} />
-                  )}
+      {filtered.map((ticket) => {
+        const isDispute = ticket.kind === 'coupon' || ticket.kind === 'coupon_dispute' || Boolean(ticket.redemption_id);
+        return (
+          <ListCard
+            key={ticket.id}
+            title={String(ticket.subject)}
+            body={`${ticket.kind || 'general'} · ${statusLabels[String(ticket.status)] || ticket.status} · Prioridad: ${ticket.priority}\n${ticket.description || ''}`}
+            footer={
+              <View style={{ gap: spacing.xs + 2, marginTop: 4 }}>
+                <View style={styles.chipRow}>
+                  <Badge label={`Estado: ${statusLabels[String(ticket.status)] || ticket.status}`} tone={ticket.status === 'resolved' ? 'green' : 'cream'} />
+                  <Badge label={`Prioridad: ${ticket.priority}`} tone={ticket.priority === 'critical' || ticket.priority === 'high' ? 'cream' : 'green'} />
+                  {isDispute ? <Badge label="Disputa de cupón" tone="cream" /> : null}
                 </View>
-              ) : null}
-            </View>
-          }
-        />
-      ))}
+
+                <View style={styles.chipRow}>
+                  <Button
+                    title={selected === ticket.id ? 'Cerrar caso' : 'Gestionar caso y chat'}
+                    size="sm"
+                    onPress={() => setSelected(selected === ticket.id ? null : ticket.id)}
+                  />
+                  {ticket.user_id ? (
+                    <Button
+                      title={historyUserId === ticket.user_id ? 'Ocultar historial' : 'Historial usuario'}
+                      size="sm"
+                      variant="secondary"
+                      onPress={() => { void loadUserHistory(String(ticket.user_id)); }}
+                    />
+                  ) : null}
+                </View>
+
+                {historyUserId === ticket.user_id && userHistory ? (
+                  <View style={styles.historyCard}>
+                    <AppText variant="label" color="primary">Historial consolidado: {userHistory.name}</AppText>
+                    <AppText variant="caption">
+                      Tickets: {userHistory.tickets} · Canjes: {userHistory.redemptions} · Reservas: {userHistory.reservations} · Rutas: {userHistory.routes}
+                    </AppText>
+                  </View>
+                ) : null}
+
+                {selected === ticket.id ? (
+                  <View style={styles.detailBox}>
+                    <TicketConversation key={`${session?.user.id || 'demo'}-${ticket.id}`} ticketId={ticket.id} isDemo={isDemo} />
+
+                    {isDispute ? (
+                      <View style={styles.disputeBox}>
+                        <AppText variant="label" color="primary">Flujo de disputa de cupón</AppText>
+                        <View style={styles.chipRow}>
+                          <Button title="Aprobar disputa y notificar" size="sm" disabled={busy} onPress={() => { void resolveCouponDispute(ticket, true); }} />
+                          <Button title="Rechazar disputa" size="sm" variant="secondary" disabled={busy} onPress={() => { void resolveCouponDispute(ticket, false); }} />
+                        </View>
+                      </View>
+                    ) : null}
+
+                    <AppText variant="label">Cambiar estado (PATCH)</AppText>
+                    <View style={styles.chipRow}>
+                      {TICKET_STATUS_OPTIONS.map((status) => (
+                        <Button
+                          key={status}
+                          size="sm"
+                          variant={ticket.status === status ? 'primary' : 'secondary'}
+                          title={statusLabels[status] || status}
+                          disabled={busy || ticket.status === status}
+                          onPress={() => { void patchTicket(ticket.id, { status }, `Ticket actualizado a ${statusLabels[status]}.`); }}
+                        />
+                      ))}
+                    </View>
+
+                    <AppText variant="label">Prioridad y asignación</AppText>
+                    <View style={styles.chipRow}>
+                      {TICKET_PRIORITY_OPTIONS.map((p) => (
+                        <Button
+                          key={p}
+                          size="sm"
+                          variant="secondary"
+                          title={p}
+                          disabled={busy || ticket.priority === p}
+                          onPress={() => { void patchTicket(ticket.id, { priority: p }, `Prioridad cambiada a ${p}.`); }}
+                        />
+                      ))}
+                      {session ? (
+                        <Button
+                          size="sm"
+                          variant="soft"
+                          title={ticket.assigned_to === session.user.id ? 'Asignado a mí' : 'Asignarme caso'}
+                          disabled={busy || ticket.assigned_to === session.user.id}
+                          onPress={() => { void patchTicket(ticket.id, { assigned_to: session.user.id }, 'Caso asignado a tu usuario.'); }}
+                        />
+                      ) : null}
+                    </View>
+
+                    <FormField
+                      label="Notificar al usuario (POST /notifications)"
+                      value={notifyText}
+                      onChangeText={setNotifyText}
+                      placeholder="Ej. Ya revisamos tu caso con el comercio."
+                    />
+                    <Button
+                      title="Enviar notificación"
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy || !notifyText.trim()}
+                      onPress={() => { void sendUserNotification(ticket); }}
+                    />
+
+                    {(data?.audits || []).length > 0 ? (
+                      <AppText variant="micro" color="inkSoft">
+                        Registros de auditoría recientes: {data?.audits.slice(0, 3).map((a) => String(a.action || a.id)).join(' · ')}
+                      </AppText>
+                    ) : null}
+
+                    <Button title="Eliminar ticket (DELETE)" size="sm" variant="soft" disabled={busy} onPress={() => { void removeTicket(ticket.id); }} />
+                  </View>
+                ) : null}
+              </View>
+            }
+          />
+        );
+      })}
 
       <Button title="Actualizar casos" variant="secondary" disabled={loading || busy} onPress={retry} />
       <Button title="Volver a inicio turista" variant="soft" onPress={() => router.replace('/turista')} />
@@ -245,7 +398,19 @@ export function SupportPanel() {
 }
 
 const styles = StyleSheet.create({
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs + 2 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs + 2, paddingBottom: 2 },
+  historyCard: {
+    backgroundColor: colors.surfaceGreenSoft,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    gap: 2,
+  },
+  disputeBox: {
+    backgroundColor: colors.surfaceGreen,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    gap: spacing.xs,
+  },
   detailBox: {
     borderTopWidth: 1,
     borderTopColor: colors.borderSoft,
