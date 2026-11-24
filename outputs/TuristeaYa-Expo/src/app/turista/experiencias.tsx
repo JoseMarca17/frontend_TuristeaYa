@@ -14,21 +14,32 @@ import { RoleBanner } from '@/components/ui/role-banner';
 import { useRemoteData } from '@/hooks/use-remote-data';
 import { listRecords, type CatalogRow } from '@/services/catalog';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { spacing } from '@/theme';
 
 export default function ExperiencesScreen() {
   const session = useAuthStore((s) => s.session);
   const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && Boolean(demoRole);
+  const demoExperiences = useDemoStore((s) => s.experiences);
+  const addDemoReservation = useDemoStore((s) => s.addReservation);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'upcoming' | 'vip'>('all');
 
   const load = useCallback(async (signal: AbortSignal): Promise<(CatalogRow & { _upcoming: boolean })[]> => {
-    const rows = await listRecords('experiences', { signal, private: Boolean(session) });
+    const rows = await listRecords('experiences', { signal, private: Boolean(session) }).catch(() => []);
+    const merged = isDemo ? [...demoExperiences, ...rows] : rows;
+    const seen = new Set<string>();
+    const dedup = merged.filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
     const now = Date.now();
-    return rows
+    return dedup
       .filter((row) => row.published !== false)
       .map((row) => ({ ...row, _upcoming: Date.parse(String(row.starts_at)) > now }));
-  }, [session]);
+  }, [session, isDemo, demoExperiences]);
 
   const { data, loading, error, retry } = useRemoteData(load);
   const visible = (data ?? []).filter((row) => {
@@ -56,22 +67,17 @@ export default function ExperiencesScreen() {
         <ListCard
           key={row.id}
           title={String(row.title)}
-          body={`${row.description}\n${new Date(String(row.starts_at)).toLocaleString()} · Bs ${row.price_per_person} por persona · Cupos: ${row.capacity ?? '—'}`}
+          body={`${row.description}\n${new Date(String(row.starts_at)).toLocaleString()} · Bs ${row.price_per_person}/persona · Cupos: ${row.capacity ?? '—'}`}
           footer={
             <View style={{ gap: spacing.xs + 2, marginTop: 4 }}>
               <View style={styles.badgeRow}>
-                {row.vip_only ? <Badge label="Exclusiva VIP" tone="cream" /> : <Badge label="Abierta a turistas" tone="green" />}
-                {!row._upcoming ? <Badge label="Fecha pasada (solo lectura)" tone="cream" /> : <Badge label="Disponible para reservar" tone="green" />}
+                {row.vip_only ? <Badge label="Exclusiva VIP" tone="cream" /> : null}
+                <Badge label={row._upcoming ? 'Disponible' : 'Fecha pasada'} tone={row._upcoming ? 'green' : 'cream'} />
               </View>
-              {!row._upcoming ? (
-                <AppText variant="micro" color="inkSoft">
-                  Esta actividad tiene fecha pasada; Render solo permite reservar experiencias con fecha futura (un Negocio puede crear nuevas fechas).
-                </AppText>
-              ) : null}
               {session || demoRole ? (
                 <>
                   <Button
-                    title={selected === row.id ? 'Cerrar reserva' : row._upcoming ? 'Reservar' : 'No disponible (fecha pasada)'}
+                    title={selected === row.id ? 'Cerrar reserva' : row._upcoming ? 'Reservar' : 'No disponible'}
                     size="sm"
                     disabled={!row._upcoming}
                     onPress={() => setSelected(selected === row.id ? null : row.id)}
@@ -82,6 +88,19 @@ export default function ExperiencesScreen() {
                       kind="reserve"
                       id={row.id}
                       unitPrice={Number(row.price_per_person)}
+                      onSuccess={(_res, people) => {
+                        if (isDemo) {
+                          addDemoReservation({
+                            id: `demo-res-${Date.now()}`,
+                            experience_id: row.id,
+                            title: String(row.title),
+                            participants: people,
+                            total: people * Number(row.price_per_person || 0),
+                            status: 'confirmada',
+                            created_at: new Date().toISOString(),
+                          });
+                        }
+                      }}
                     />
                   ) : null}
                 </>

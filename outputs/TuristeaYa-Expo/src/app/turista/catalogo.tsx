@@ -6,7 +6,6 @@ import { SponsoredCampaignBanner } from '@/components/ads/sponsored-banner';
 import { Screen } from '@/components/layout/screen';
 import { PlacePhoto } from '@/components/place-photo';
 import { AppText } from '@/components/ui/app-text';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { FormField } from '@/components/ui/form-field';
@@ -25,6 +24,7 @@ import {
 import { createRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { calculateDiscountedCost, useCouponStore } from '@/stores/use-coupon-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { spacing } from '@/theme';
 import type { PlaceCategory } from '@/types';
@@ -49,6 +49,12 @@ function normalizeCategorySlug(raw: unknown): PlaceCategory {
 
 export default function CatalogScreen() {
   const session = useAuthStore((s) => s.session);
+  const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && Boolean(demoRole);
+  const demoPlaces = useDemoStore((s) => s.places);
+  const demoRoutes = useDemoStore((s) => s.routes);
+  const toggleDemoSavedRoute = useDemoStore((s) => s.toggleSavedRoute);
+  const addDemoVisit = useDemoStore((s) => s.addVisit);
   const activeCoupon = useCouponStore((s) => s.activeCoupon);
   const showToast = useUiStore((s) => s.showToast);
   const { location } = useSelectedLocation();
@@ -106,8 +112,15 @@ export default function CatalogScreen() {
     }
 
     // Guardia estricta Fase 2: ningún lugar con published === false aparece en el catálogo público.
+    const combinedPlaces = isDemo ? [...demoPlaces, ...places] : places;
+    const seenIds = new Set<string>();
+    const dedupPlaces = combinedPlaces.filter((row) => {
+      if (seenIds.has(row.id)) return false;
+      seenIds.add(row.id);
+      return true;
+    });
     const publishedPlaces = filterPublishedPlaces(
-      places.map((row): CatalogRow & { published: boolean } => ({ ...row, published: row.published !== false })),
+      dedupPlaces.map((row): CatalogRow & { published: boolean } => ({ ...row, published: row.published !== false })),
     );
 
     return {
@@ -136,9 +149,12 @@ export default function CatalogScreen() {
           published: row.published !== false,
         };
       }),
-      routes: routes.filter((row) => row.visibility === 'public' || row.user_id === session?.user.id),
+      routes: [
+        ...(isDemo ? demoRoutes.map((r) => ({ id: r.id, name: r.name, budget: r.cost, available_minutes: r.durationMin, visibility: r.visibility, user_id: r.userId }) as CatalogRow) : []),
+        ...routes.filter((row) => row.visibility === 'public' || row.user_id === session?.user.id),
+      ],
     };
-  }, [session, originPoint.latitude, originPoint.longitude]);
+  }, [session, isDemo, demoPlaces, demoRoutes, originPoint.latitude, originPoint.longitude]);
 
   const { data, loading, error, retry } = useRemoteData(load);
 
@@ -173,11 +189,16 @@ export default function CatalogScreen() {
   }
 
   async function saveRoute(id: string) {
+    if (isDemo) {
+      const savedNow = toggleDemoSavedRoute(id);
+      showToast(savedNow ? 'Ruta guardada en tus favoritas.' : 'Ruta quitada de favoritas.', 'success');
+      return;
+    }
     if (!session) { router.navigate('/login'); return; }
     if (saving) return;
     setSaving(true);
     try {
-      await createRecord('saved-routes', { user_id: session.user.id, route_id: id }, 'Guardando ruta en tu cuenta…');
+      await createRecord('saved-routes', { user_id: session.user.id, route_id: id }, 'Guardando ruta…');
       showToast('Ruta guardada en tu cuenta.', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo guardar.', 'error');
@@ -186,13 +207,18 @@ export default function CatalogScreen() {
     }
   }
 
-  async function registerVisit(placeId: string) {
+  async function registerVisit(placeId: string, placeName = 'Lugar') {
+    if (isDemo) {
+      addDemoVisit(placeId, placeName);
+      showToast('Visita registrada en tu historial.', 'success');
+      return;
+    }
     if (!session) { router.navigate('/login'); return; }
     if (saving) return;
     setSaving(true);
     try {
       await createRecord('place-visits', { user_id: session.user.id, place_id: placeId }, 'Registrando visita…');
-      showToast('Visita registrada en Render.', 'success');
+      showToast('Visita registrada.', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo registrar la visita.', 'error');
     } finally {
@@ -259,23 +285,18 @@ export default function CatalogScreen() {
               <ListCard
                 key={place.id}
                 title={place.name}
-                body={`${place.description}\n${place.address} · A ${distKm} km · Bs ${place.estimatedCost} · ${place.visitMinutes} min`}
+                body={`${place.description}\n${categoryLabels[place.primaryCategory]}${place.reviewCount > 0 ? ` · ★ ${place.averageRating} (${place.reviewCount})` : ''} · A ${distKm} km · Bs ${place.estimatedCost} · ${place.visitMinutes} min`}
                 onPress={() => router.navigate(`/turista/lugar/${place.id}`)}
                 footer={
                   <View style={{ gap: spacing.xs + 2, marginTop: 4 }}>
-                    <View style={styles.chipRow}>
-                      <Badge label={categoryLabels[place.primaryCategory]} tone="green" />
-                      <Badge
-                        label={place.reviewCount > 0 ? `★ ${place.averageRating} (${place.reviewCount})` : 'Sin reseñas'}
-                        tone="cream"
-                      />
-                      {place.tags.slice(0, 3).map((tag) => (
-                        <Badge key={tag} label={tag} tone="cream" />
-                      ))}
-                    </View>
+                    {place.tags.length > 0 ? (
+                      <AppText variant="micro" color="inkMuted">
+                        Servicios: {place.tags.slice(0, 4).join(' · ')}
+                      </AppText>
+                    ) : null}
                     <PlacePhoto key={place.id} name={place.name} />
                     <View style={styles.actionRow}>
-                      {map ? <Button title="Mapa real" size="sm" variant="secondary" onPress={() => { void openMap(map); }} /> : null}
+                      {map ? <Button title="Ver mapa" size="sm" variant="secondary" onPress={() => { void openMap(map); }} /> : null}
                       <Button
                         title="Reseñas"
                         size="sm"
@@ -287,7 +308,7 @@ export default function CatalogScreen() {
                         size="sm"
                         variant="soft"
                         disabled={saving}
-                        onPress={() => { void registerVisit(place.id); }}
+                        onPress={() => { void registerVisit(place.id, place.name); }}
                       />
                     </View>
                   </View>

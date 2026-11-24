@@ -16,6 +16,7 @@ import { buildCouponVerificationCode } from '@/services/domain-rules';
 import { createRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { calculateDiscountedCost, useCouponStore } from '@/stores/use-coupon-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useRouteFilterStore } from '@/stores/use-route-filter-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
@@ -27,6 +28,9 @@ import { formatDuration } from '@/utils/format';
  */
 export default function CuponCanjeadoScreen() {
   const session = useAuthStore((s) => s.session);
+  const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && Boolean(demoRole);
+  const addDemoTicket = useDemoStore((s) => s.addTicket);
   const activeCoupon = useCouponStore((s) => s.activeCoupon);
   const redemptions = useCouponStore((s) => s.redemptions);
   const showToast = useUiStore((s) => s.showToast);
@@ -44,7 +48,28 @@ export default function CuponCanjeadoScreen() {
   const { data: routes, loading, error, retry } = useRemoteData(loadRoutes);
 
   async function submitCouponDispute() {
-    if (!session || !coupon || !disputeText.trim() || disputeBusy) return;
+    if (!coupon || !disputeText.trim() || disputeBusy) return;
+    if (isDemo) {
+      addDemoTicket({
+        id: `demo-tk-${Date.now()}`,
+        user_id: `demo-${demoRole}`,
+        redemption_id: coupon.id,
+        kind: 'coupon',
+        priority: 'high',
+        status: 'pending',
+        subject: `Disputa de cupón ${coupon.code}`,
+        description: disputeText.trim(),
+        created_at: new Date().toISOString(),
+      });
+      setDisputeText('');
+      setDisputeOpen(false);
+      showToast('Disputa registrada para revisión de Soporte.', 'success');
+      return;
+    }
+    if (!session) {
+      router.navigate('/login');
+      return;
+    }
     setDisputeBusy(true);
     try {
       await createRecord(
@@ -57,11 +82,11 @@ export default function CuponCanjeadoScreen() {
           subject: `Disputa de cupón ${coupon.code}`,
           description: disputeText.trim(),
         },
-        'Enviando disputa de canje a Soporte…',
+        'Enviando disputa de canje…',
       );
       setDisputeText('');
       setDisputeOpen(false);
-      showToast('Disputa enviada a Soporte y notificada para revisión.', 'success');
+      showToast('Disputa enviada a Soporte.', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo abrir la disputa.', 'error');
     } finally {
@@ -144,11 +169,11 @@ export default function CuponCanjeadoScreen() {
               multiline
             />
             <Button
-              title={session ? (disputeBusy ? 'Enviando…' : 'Enviar disputa a Soporte') : 'Inicia sesión para disputar'}
+              title={session || isDemo ? (disputeBusy ? 'Enviando…' : 'Enviar disputa') : 'Inicia sesión para disputar'}
               size="sm"
               disabled={disputeBusy}
               onPress={() => {
-                if (!session) router.navigate('/login');
+                if (!session && !isDemo) router.navigate('/login');
                 else void submitCouponDispute();
               }}
             />

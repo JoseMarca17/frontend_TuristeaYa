@@ -9,19 +9,104 @@ import { ListCard } from '@/components/ui/list-card';
 import { ErrorState, LoadingState } from '@/components/ui/loading-state';
 import { RoleBanner } from '@/components/ui/role-banner';
 import { useRemoteData } from '@/hooks/use-remote-data';
-import { listRecords } from '@/services/catalog';
+import { listRecords, type CatalogRow } from '@/services/catalog';
 import { deleteRecord, updateRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useCouponStore } from '@/stores/use-coupon-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
-import { colors, radius, spacing } from '@/theme';
+import { borderWidth, colors, radius, spacing } from '@/theme';
 
 export default function AccountScreen({ section }: { section?: string } = {}) {
   const session = useAuthStore((s) => s.session);
+  const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && Boolean(demoRole);
   const showToast = useUiStore((s) => s.showToast);
   const [busy, setBusy] = useState<string | null>(null);
 
+  const demoNotifs = useDemoStore((s) => s.notifications);
+  const demoSavedIds = useDemoStore((s) => s.savedRouteIds);
+  const demoVisitedIds = useDemoStore((s) => s.visitedRouteIds);
+  const demoRoutes = useDemoStore((s) => s.routes);
+  const demoReservations = useDemoStore((s) => s.reservations);
+  const demoVisits = useDemoStore((s) => s.visits);
+  const demoTickets = useDemoStore((s) => s.tickets);
+  const markDemoNotifRead = useDemoStore((s) => s.markNotificationRead);
+  const deleteDemoNotif = useDemoStore((s) => s.deleteNotification);
+  const toggleDemoVisitedRoute = useDemoStore((s) => s.toggleVisitedRoute);
+  const toggleDemoSavedRoute = useDemoStore((s) => s.toggleSavedRoute);
+  const localRedemptions = useCouponStore((s) => s.redemptions);
+
   const load = useCallback(async (signal: AbortSignal) => {
-    if (!session) return null;
+    if (!session) {
+      if (!isDemo) return null;
+      const [routes, places] = await Promise.all([
+        listRecords('routes', { signal }).catch(() => []),
+        listRecords('places', { signal }).catch(() => []),
+      ]);
+      const routeNames = new Map<string, string>([
+        ...routes.map((r): [string, string] => [r.id, String(r.name || 'Ruta')]),
+        ...demoRoutes.map((r): [string, string] => [r.id, r.name]),
+      ]);
+      const placeNames = new Map<string, string>(
+        places.map((p): [string, string] => [p.id, String(p.name || 'Lugar')]),
+      );
+
+      return [
+        { label: 'Notificaciones', routeNames, placeNames, rows: demoNotifs, error: '' },
+        {
+          label: 'Rutas guardadas en mi cuenta',
+          routeNames,
+          placeNames,
+          rows: demoSavedIds.map((rid) => ({
+            id: rid,
+            route_id: rid,
+            visited_at: demoVisitedIds.includes(rid) ? new Date().toISOString() : null,
+          })) as CatalogRow[],
+          error: '',
+        },
+        {
+          label: 'Reservas',
+          routeNames,
+          placeNames,
+          rows: demoReservations.map((r) => ({ ...r })) as unknown as CatalogRow[],
+          error: '',
+        },
+        {
+          label: 'Canjes de cupones',
+          routeNames,
+          placeNames,
+          rows: localRedemptions.map((c) => ({
+            id: c.id,
+            savings: c.savings,
+            redeemed_at: c.redeemedAt,
+          })) as CatalogRow[],
+          error: '',
+        },
+        {
+          label: 'Lugares visitados',
+          routeNames,
+          placeNames,
+          rows: demoVisits.map((v) => ({
+            id: v.id,
+            place_id: v.place_id,
+            visited_at: v.visited_at,
+          })) as CatalogRow[],
+          error: '',
+        },
+        {
+          label: 'Suscripciones',
+          routeNames,
+          placeNames,
+          rows: demoRole === 'vip'
+            ? ([{ id: 'demo-vip', status: 'active', ends_at: new Date(Date.now() + 30 * 86400000).toISOString() }] as CatalogRow[])
+            : [],
+          error: '',
+        },
+        { label: 'Reportes', routeNames, placeNames, rows: demoTickets, error: '' },
+      ];
+    }
+
     const options = { signal, private: true, filters: { user_id: session.user.id } };
     const [notifs, reservs, subs, ticks, saved, visits, redemptions, routes, places] = await Promise.allSettled([
       listRecords('notifications', options),
@@ -59,15 +144,32 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
       rows: res.status === 'fulfilled' ? res.value.filter((row) => row.user_id === session.user.id) : [],
       error: res.status === 'rejected' ? String(res.reason?.message || 'No se pudo consultar este recurso.') : '',
     }));
-  }, [session]);
+  }, [
+    session,
+    isDemo,
+    demoNotifs,
+    demoSavedIds,
+    demoVisitedIds,
+    demoRoutes,
+    demoReservations,
+    demoVisits,
+    demoTickets,
+    demoRole,
+    localRedemptions,
+  ]);
 
   const { data, loading, error, retry } = useRemoteData(load);
 
   async function markRead(id: string) {
+    if (isDemo) {
+      markDemoNotifRead(id);
+      showToast('Aviso marcado como leído.', 'info');
+      return;
+    }
     if (busy) return;
     setBusy(id);
     try {
-      await updateRecord('notifications', id, { read_at: new Date().toISOString() }, 'Marcando notificación como leída…');
+      await updateRecord('notifications', id, { read_at: new Date().toISOString() }, 'Actualizando…');
       showToast('Notificación marcada como leída.', 'success');
       retry();
     } catch (err) {
@@ -78,6 +180,12 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
   }
 
   async function removeRecord(entity: string, id: string, successMessage: string) {
+    if (isDemo) {
+      if (entity === 'notifications') deleteDemoNotif(id);
+      else if (entity === 'saved-routes') toggleDemoSavedRoute(id);
+      showToast(successMessage, 'info');
+      return;
+    }
     if (busy) return;
     setBusy(id);
     try {
@@ -92,6 +200,11 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
   }
 
   async function markSavedVisited(id: string, currentlyVisited: boolean) {
+    if (isDemo) {
+      toggleDemoVisitedRoute(id);
+      showToast(currentlyVisited ? 'Marcada como pendiente.' : 'Marcada como visitada.', 'info');
+      return;
+    }
     if (busy) return;
     setBusy(id);
     try {
@@ -111,16 +224,16 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
   }
 
   return (
-    <Screen title={section || 'Mi cuenta'} subtitle="Historial y datos sincronizados en Render">
+    <Screen title={section || 'Mi cuenta'} subtitle="Historial, reservas y avisos">
       <RoleBanner />
-      {!session ? (
+      {!session && !isDemo ? (
         <View style={styles.emptyBox}>
-          <AppText variant="bodySmall">Inicia sesión en Render para consultar tus notificaciones, reservas, rutas guardadas y tickets.</AppText>
+          <AppText variant="bodySmall">Inicia sesión para consultar tus notificaciones, reservas y rutas guardadas.</AppText>
           <Button title="Iniciar sesión" onPress={() => router.navigate('/login')} />
         </View>
       ) : null}
 
-      {loading ? <LoadingState label="Cargando datos de tu cuenta…" /> : null}
+      {loading ? <LoadingState label="Cargando información…" /> : null}
       {error ? <ErrorState message={error} onRetry={retry} /> : null}
 
       {data
@@ -129,23 +242,23 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
           <ListCard
             key={group.label}
             title={`${group.label} (${group.rows.length})`}
-            body={group.error || (!group.rows.length ? 'Sin registros para esta cuenta.' : '')}
+            body={group.error || (!group.rows.length ? 'Sin registros todavía.' : '')}
             footer={
               <>
                 {group.rows.map((row) => {
                   let title = String(row.title || row.subject || row.status || 'Registro');
                   let body = String(row.body || row.description || '');
                   if (group.label === 'Rutas guardadas en mi cuenta') {
-                    title = group.routeNames.get(String(row.route_id)) || `Ruta ${String(row.route_id).slice(0, 8)}`;
+                    title = group.routeNames.get(String(row.route_id)) || 'Ruta guardada';
                     body = row.visited_at ? `Visitada el ${new Date(String(row.visited_at)).toLocaleDateString()}` : 'Pendiente por recorrer';
                   } else if (group.label === 'Lugares visitados') {
-                    title = group.placeNames.get(String(row.place_id)) || `Lugar ${String(row.place_id).slice(0, 8)}`;
+                    title = group.placeNames.get(String(row.place_id)) || String(row.place_name || 'Lugar visitado');
                     body = `Visita registrada: ${new Date(String(row.visited_at || row.created_at)).toLocaleString()}`;
                   } else if (group.label === 'Canjes de cupones') {
                     title = `Cupón canjeado · Ahorro Bs ${row.savings}`;
                     body = `Canjeado el ${new Date(String(row.redeemed_at || row.created_at)).toLocaleString()}`;
                   } else if (group.label === 'Reservas') {
-                    title = `Reserva (${row.status || 'confirmada'})`;
+                    title = String(row.title || `Reserva (${row.status || 'confirmada'})`);
                     body = `${row.participants} participantes · Total Bs ${row.total}`;
                   } else if (group.label === 'Suscripciones') {
                     title = `Suscripción ${row.status}`;
@@ -182,7 +295,7 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
                                 size="sm"
                                 variant="soft"
                                 disabled={busy !== null}
-                                onPress={() => { void removeRecord('saved-routes', row.id, 'Ruta quitada de tu cuenta.'); }}
+                                onPress={() => { void removeRecord('saved-routes', row.id, 'Ruta quitada de tus guardadas.'); }}
                               />
                             </>
                           ) : null}
@@ -204,7 +317,7 @@ const styles = StyleSheet.create({
   emptyBox: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
-    borderWidth: 1,
+    borderWidth: borderWidth.hairline,
     borderColor: colors.border,
     padding: spacing.lg,
     gap: spacing.sm,

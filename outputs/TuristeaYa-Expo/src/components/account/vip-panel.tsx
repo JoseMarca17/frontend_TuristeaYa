@@ -262,16 +262,16 @@ export function VipPanel() {
             <AppText variant="section">Estado de membresía</AppText>
           </View>
           <Badge
-            label={vipSummary.active ? `VIP Activo (${vipSummary.daysRemaining}d)` : vipSummary.isExpired ? 'VIP Expirado' : 'Sin VIP activo'}
+            label={vipSummary.active ? `Plan VIP activo` : vipSummary.isExpired ? 'VIP expirado' : 'Sin VIP'}
             tone={vipSummary.active ? 'green' : 'cream'}
           />
         </View>
         <AppText variant="bodySmall">
           {vipSummary.active
-            ? `VIP vigente hasta ${vipSummary.expiresAt ? new Date(vipSummary.expiresAt).toLocaleDateString() : 'vigencia demo'}. Anuncios ocultos automáticamente, hasta ${vipSummary.maxStopsAllowed} paradas por ruta y descargas SQLite activas.`
+            ? `VIP vigente hasta ${vipSummary.expiresAt ? new Date(vipSummary.expiresAt).toLocaleDateString() : 'vigencia actual'}. Anuncios ocultos, rutas ampliadas y descargas sin conexión habilitadas.`
             : vipSummary.isExpired
-              ? 'Tu suscripción expiró. Las funciones VIP (offline, rutas de +4 paradas y reservas exclusivas) fueron bloqueadas automáticamente.'
-              : 'Sin suscripción VIP vigente. Puedes ver los planes disponibles abajo (activación real pendiente de pasarela de pago o alta administrativa).'}
+              ? 'Tu suscripción expiró y los beneficios VIP quedaron bloqueados hasta renovar.'
+              : 'Activa un plan VIP para quitar anuncios, descargar mapas offline y acceder a experiencias exclusivas.'}
         </AppText>
         <View style={styles.row}>
           <Button title="Experiencias VIP" size="sm" onPress={() => router.navigate('/turista/experiencias')} />
@@ -285,7 +285,7 @@ export function VipPanel() {
         </View>
         {lastGlobalSyncAt ? (
           <AppText variant="caption" color="inkMuted">
-            Última sincronización: {new Date(lastGlobalSyncAt).toLocaleString()}
+            Última actualización: {new Date(lastGlobalSyncAt).toLocaleString()}
           </AppText>
         ) : null}
       </View>
@@ -393,7 +393,7 @@ export function VipPanel() {
                 body={`Bs ${r.budget} · ${r.available_minutes} min`}
                 footer={
                   <Button
-                    title={busyId === r.id ? 'Guardando snapshot…' : 'Descargar offline (SQLite + Render)'}
+                    title={busyId === r.id ? 'Guardando…' : 'Guardar sin conexión'}
                     size="sm"
                     disabled={busyId !== null}
                     onPress={() => { void addOfflineDownload(r.id); }}

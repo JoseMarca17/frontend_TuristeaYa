@@ -18,6 +18,7 @@ import { useRemoteData } from '@/hooks/use-remote-data';
 import { createRecord, deleteRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { calculateDiscountedCost, useCouponStore } from '@/stores/use-coupon-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import {
   countActiveRouteFilters,
   useRouteFilterStore,
@@ -45,6 +46,10 @@ export default function RutasDisponiblesScreen() {
   const { location } = useSelectedLocation();
   const session = useAuthStore((s) => s.session);
   const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && Boolean(demoRole);
+  const demoRoutes = useDemoStore((s) => s.routes);
+  const createDemoRoute = useDemoStore((s) => s.createRoute);
+  const deleteDemoRoute = useDemoStore((s) => s.deleteRoute);
   const showToast = useUiStore((s) => s.showToast);
 
   const activeCoupon = useCouponStore((s) => s.activeCoupon);
@@ -113,7 +118,19 @@ export default function RutasDisponiblesScreen() {
   );
 
   const { data: results, loading, error, retry } = useRemoteData(load);
-  const routes: BackendPlannedRoute[] = results ?? [];
+  const routes: BackendPlannedRoute[] = [
+    ...(isDemo
+      ? demoRoutes.filter((r) => {
+          if (visibility === 'public' && r.visibility !== 'public') return false;
+          if (categories.length > 0 && !categories.some((c) => r.categories.includes(c))) return false;
+          if (maxBudget != null && r.cost > maxBudget) return false;
+          if (maxMinutes != null && r.durationMin > maxMinutes) return false;
+          if (searchQuery.trim() && !r.name.toLowerCase().includes(searchQuery.trim().toLowerCase())) return false;
+          return true;
+        })
+      : []),
+    ...(results ?? []),
+  ];
 
   function openFilters() {
     setDraftCategories(categories);
@@ -156,12 +173,8 @@ export default function RutasDisponiblesScreen() {
   }
 
   async function handleCreateRoute() {
-    if (!session) {
-      setCreateError(
-        demoRole
-          ? 'Estás en Vista Demo local. Para guardar con POST real en Render entra con una cuenta real en Iniciar sesión.'
-          : 'Inicia sesión para crear rutas en Render.',
-      );
+    if (!session && !isDemo) {
+      setCreateError('Inicia sesión o activa la Vista Demo para crear rutas.');
       return;
     }
     const budgetNum = Number(newBudget.replace(',', '.'));
@@ -170,13 +183,40 @@ export default function RutasDisponiblesScreen() {
       setCreateError('Completa un nombre, presupuesto válido (0 o mayor) y duración mayor a 0.');
       return;
     }
+    if (isDemo) {
+      const demoId = `demo-route-${Date.now()}`;
+      createDemoRoute({
+        id: demoId,
+        userId: `demo-${demoRole}`,
+        isMine: true,
+        visibility: newVisibility,
+        name: newName.trim(),
+        placeIds: [],
+        categories: ['cultura'],
+        cost: budgetNum,
+        durationMin: Math.round(minsNum),
+        distanceKm: 0,
+        visited: false,
+        departure: location.label,
+        origin: {
+          latitude: location.latitude ?? -16.4955,
+          longitude: location.longitude ?? -68.1336,
+        },
+        places: [],
+      });
+      setCreateOpen(false);
+      setNewName('');
+      showToast('Ruta creada en Vista Demo.', 'success');
+      router.navigate(`/turista/ruta/${demoId}`);
+      return;
+    }
     setCreating(true);
     setCreateError('');
     try {
       const created = await createRecord<{ id: string }>(
         'routes',
         {
-          user_id: session.user.id,
+          user_id: session!.user.id,
           name: newName.trim(),
           budget: budgetNum,
           available_minutes: Math.round(minsNum),
@@ -184,11 +224,11 @@ export default function RutasDisponiblesScreen() {
           origin_lng: location.longitude ?? -68.1336,
           visibility: newVisibility,
         },
-        'Creando ruta en Render…',
+        'Creando ruta…',
       );
       setCreateOpen(false);
       setNewName('');
-      showToast('Ruta creada en Render.', 'success');
+      showToast('Ruta creada.', 'success');
       if (created?.id) {
         router.navigate(`/turista/ruta/${created.id}`);
       } else {
@@ -204,10 +244,16 @@ export default function RutasDisponiblesScreen() {
   }
 
   async function handleDeleteRoute(routeId: string) {
-    try {
-      await deleteRecord('routes', routeId, 'Eliminando ruta en Render…');
+    if (isDemo && routeId.startsWith('demo-route-')) {
+      deleteDemoRoute(routeId);
       setConfirmDeleteId(null);
-      showToast('Ruta eliminada de Render.', 'success');
+      showToast('Ruta eliminada.', 'info');
+      return;
+    }
+    try {
+      await deleteRecord('routes', routeId, 'Eliminando ruta…');
+      setConfirmDeleteId(null);
+      showToast('Ruta eliminada.', 'success');
       retry();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo eliminar la ruta.', 'error');
@@ -340,7 +386,7 @@ export default function RutasDisponiblesScreen() {
         ))}
       </View>
 
-      {loading ? <LoadingState label="Cargando todas las rutas de Render…" /> : null}
+      {loading ? <LoadingState label="Cargando rutas…" /> : null}
       {error ? <ErrorState message={error} onRetry={retry} /> : null}
 
       {!loading && !error && !routes.length ? (
@@ -567,16 +613,16 @@ export default function RutasDisponiblesScreen() {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <AppText variant="title">Nueva ruta en Render</AppText>
+              <AppText variant="title">Nueva ruta</AppText>
               <Pressable onPress={() => setCreateOpen(false)} hitSlop={8} accessibilityLabel="Cerrar creación de ruta">
                 <Ionicons name="close" size={24} color={colors.ink} />
               </Pressable>
             </View>
             <ScrollView contentContainerStyle={{ gap: spacing.md }} keyboardShouldPersistTaps="handled">
-              {!session ? (
+              {!session && !isDemo ? (
                 <View style={styles.couponBanner}>
                   <AppText variant="bodySmall">
-                    Para crear y guardar rutas en el servidor de Render necesitas iniciar sesión con una cuenta real.
+                    Inicia sesión o activa la Vista Demo para guardar rutas personalizadas.
                   </AppText>
                   <Button title="Ir a iniciar sesión" onPress={() => { setCreateOpen(false); router.navigate('/login'); }} />
                 </View>
@@ -601,14 +647,14 @@ export default function RutasDisponiblesScreen() {
                     keyboardType="number-pad"
                   />
                   <View style={{ gap: 6 }}>
-                    <AppText variant="label">Visibilidad en Render</AppText>
+                    <AppText variant="label">Visibilidad</AppText>
                     <View style={styles.quickRow}>
-                      <Chip label="Privada (solo yo)" selected={newVisibility === 'private'} onPress={() => setNewVisibility('private')} />
-                      <Chip label="Pública (catálogo)" selected={newVisibility === 'public'} onPress={() => setNewVisibility('public')} />
+                      <Chip label="Privada" selected={newVisibility === 'private'} onPress={() => setNewVisibility('private')} />
+                      <Chip label="Pública" selected={newVisibility === 'public'} onPress={() => setNewVisibility('public')} />
                     </View>
                   </View>
                   {createError ? <AppText accessibilityRole="alert" variant="caption" style={{ color: '#b91c1c' }}>{createError}</AppText> : null}
-                  <Button title={creating ? 'Creando en Render…' : 'Crear ruta y añadir paradas'} disabled={creating} onPress={() => { void handleCreateRoute(); }} />
+                  <Button title={creating ? 'Creando…' : 'Crear ruta y añadir paradas'} disabled={creating} onPress={() => { void handleCreateRoute(); }} />
                 </>
               )}
             </ScrollView>

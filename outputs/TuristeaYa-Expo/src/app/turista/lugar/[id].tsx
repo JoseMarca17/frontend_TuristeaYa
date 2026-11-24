@@ -18,6 +18,7 @@ import { useRemoteData } from '@/hooks/use-remote-data';
 import { getRecord, listRecords } from '@/services/catalog';
 import { createRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
 
@@ -27,10 +28,13 @@ export default function LugarScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const localPlace = findDiscoveryPlace(id);
   const session = useAuthStore((s) => s.session);
+  const demoRole = useAuthStore((s) => s.demoRole);
+  const demoPlaces = useDemoStore((s) => s.places);
+  const demoMatch = !session && demoRole ? demoPlaces.find((p) => p.id === id) : undefined;
 
   const loadRemote = useCallback(
     async (signal: AbortSignal) => {
-      if (localPlace) return null;
+      if (localPlace || demoMatch) return null;
       const [place, hours, reviews] = await Promise.all([
         getRecord('places', id, { signal, private: Boolean(session) }),
         listRecords('opening-hours', { signal, filters: { place_id: id } }).catch(() => []),
@@ -38,13 +42,33 @@ export default function LugarScreen() {
       ]);
       return { place, hours, reviews: reviews.filter((r) => !r.hidden) };
     },
-    [id, localPlace, session],
+    [id, localPlace, demoMatch, session],
   );
 
   const { data, loading, error, retry } = useRemoteData(loadRemote);
 
   if (localPlace) {
     return <PlaceDetails key={localPlace.id} place={localPlace} />;
+  }
+
+  if (demoMatch) {
+    const lat = Number(demoMatch.latitude ?? -16.4955);
+    const lng = Number(demoMatch.longitude ?? -68.1336);
+    return (
+      <RemotePlaceDetails
+        placeId={demoMatch.id}
+        name={String(demoMatch.name || 'Lugar')}
+        description={String(demoMatch.description || '')}
+        address={String(demoMatch.address || 'La Paz')}
+        estimatedCost={demoMatch.estimated_cost != null ? Number(demoMatch.estimated_cost) : null}
+        visitMinutes={demoMatch.visit_minutes != null ? Number(demoMatch.visit_minutes) : null}
+        point={{ latitude: lat, longitude: lng }}
+        hoursText="Consulta horarios en el local."
+        services={Array.isArray(demoMatch.services) ? demoMatch.services.map(String) : []}
+        reviewsCount={0}
+        averageRating={null}
+      />
+    );
   }
 
   if (loading) {
@@ -126,6 +150,10 @@ function RemotePlaceDetails({
   averageRating: number | null;
 }) {
   const session = useAuthStore((s) => s.session);
+  const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && Boolean(demoRole);
+  const addDemoVisit = useDemoStore((s) => s.addVisit);
+  const addDemoTicket = useDemoStore((s) => s.addTicket);
   const showToast = useUiStore((s) => s.showToast);
   const [visiting, setVisiting] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -133,11 +161,28 @@ function RemotePlaceDetails({
   const [reporting, setReporting] = useState(false);
 
   async function submitPlaceReport() {
+    if (!reportText.trim() || reporting) return;
+    if (isDemo) {
+      addDemoTicket({
+        id: `demo-tk-${Date.now()}`,
+        user_id: `demo-${demoRole}`,
+        place_id: placeId,
+        kind: 'other',
+        priority: 'medium',
+        status: 'pending',
+        subject: `Información incorrecta en ${name}`,
+        description: reportText.trim(),
+        created_at: new Date().toISOString(),
+      });
+      setReportText('');
+      setReportOpen(false);
+      showToast('Reporte enviado a soporte.', 'success');
+      return;
+    }
     if (!session) {
       router.navigate('/login');
       return;
     }
-    if (!reportText.trim() || reporting) return;
     setReporting(true);
     try {
       await createRecord(
@@ -150,11 +195,11 @@ function RemotePlaceDetails({
           subject: `Información incorrecta en ${name}`,
           description: reportText.trim(),
         },
-        'Enviando reporte de lugar…',
+        'Enviando reporte…',
       );
       setReportText('');
       setReportOpen(false);
-      showToast('Reporte enviado al equipo de soporte y administración.', 'success');
+      showToast('Reporte enviado.', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo enviar el reporte.', 'error');
     } finally {
@@ -163,6 +208,11 @@ function RemotePlaceDetails({
   }
 
   async function logVisit() {
+    if (isDemo) {
+      addDemoVisit(placeId, name);
+      showToast('Visita registrada en tu historial.', 'success');
+      return;
+    }
     if (!session) {
       router.navigate('/login');
       return;
@@ -171,7 +221,7 @@ function RemotePlaceDetails({
     setVisiting(true);
     try {
       await createRecord('place-visits', { user_id: session.user.id, place_id: placeId }, 'Registrando visita…');
-      showToast('Visita registrada en tu cuenta de Render.', 'success');
+      showToast('Visita registrada.', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo registrar la visita.', 'error');
     } finally {
@@ -180,7 +230,7 @@ function RemotePlaceDetails({
   }
 
   return (
-    <Screen title={name} subtitle="Lugar publicado en Render">
+    <Screen title={name} subtitle="Detalle del lugar">
       {point ? <LocationCard point={point} title={name} note={address} /> : null}
       <PlacePhoto name={name} />
       <AppText variant="body">{description}</AppText>

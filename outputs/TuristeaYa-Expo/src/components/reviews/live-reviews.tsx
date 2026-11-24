@@ -20,12 +20,23 @@ import { validateAndCompressImage, type PreparedImageAsset } from '@/services/im
 import { createRecord, deleteRecord, updateRecord } from '@/services/management';
 import { uploadReviewMedia } from '@/services/media';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { createDemoId, useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
 
 export function LiveReviews() {
   const { placeId } = useLocalSearchParams<{ placeId: string }>();
   const session = useAuthStore((s) => s.session);
+  const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && Boolean(demoRole);
+  const demoPlaces = useDemoStore((s) => s.places);
+  const demoReviews = useDemoStore((s) => s.reviews);
+  const demoReplies = useDemoStore((s) => s.reviewReplies);
+  const demoName = useDemoStore((s) => s.profileName);
+  const addDemoReview = useDemoStore((s) => s.addReview);
+  const updateDemoReview = useDemoStore((s) => s.updateReview);
+  const deleteDemoReview = useDemoStore((s) => s.deleteReview);
+  const addDemoTicket = useDemoStore((s) => s.addTicket);
   const showToast = useUiStore((s) => s.showToast);
 
   const [filter, setFilter] = useState<FilterType>('recientes');
@@ -44,11 +55,12 @@ export function LiveReviews() {
   const lock = useRef(false);
 
   const load = useCallback(async (signal: AbortSignal) => {
-    const places = await listRecords('places', { signal, private: Boolean(session) });
+    const places = await listRecords('places', { signal, private: Boolean(session) }).catch(() => []);
+    const allPlaces = isDemo ? [...demoPlaces, ...places] : places;
     const local = placeId ? findDiscoveryPlace(placeId) : undefined;
     const place =
-      places.find((row) => row.id === placeId) ||
-      places.find(
+      allPlaces.find((row) => row.id === placeId) ||
+      allPlaces.find(
         (row) =>
           local &&
           String(row.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() ===
@@ -56,12 +68,25 @@ export function LiveReviews() {
       );
     if (!place) return { place: undefined, rows: [] as CatalogRow[], replies: [] as CatalogRow[], media: [] as CatalogRow[] };
     const [rows, replies, media] = await Promise.all([
-      listRecords('reviews', { signal, filters: { place_id: place.id } }),
+      listRecords('reviews', { signal, filters: { place_id: place.id } }).catch(() => []),
       listRecords('review-replies', { signal }).catch(() => []),
       listRecords('review-media', { signal }).catch(() => []),
     ]);
-    return { place, rows: rows.filter((row) => !row.hidden), replies, media };
-  }, [placeId, session]);
+    const extraReviews = isDemo
+      ? demoReviews
+          .filter((r) => r.place_id === place.id)
+          .map((r) => ({ ...r }) as unknown as CatalogRow)
+      : [];
+    const extraReplies = isDemo
+      ? demoReplies.map((rep) => ({ ...rep }) as unknown as CatalogRow)
+      : [];
+    return {
+      place,
+      rows: [...extraReviews, ...rows].filter((row) => !row.hidden),
+      replies: [...extraReplies, ...replies],
+      media,
+    };
+  }, [placeId, session, isDemo, demoPlaces, demoReviews, demoReplies]);
 
   const { data, loading, error, retry } = useRemoteData(load);
 
@@ -121,10 +146,28 @@ export function LiveReviews() {
   }
 
   async function publish() {
-    if (!session || !data?.place || lock.current || !body.trim()) return;
+    if ((!session && !isDemo) || !data?.place || lock.current || !body.trim()) return;
     const stars = Number(rating);
     if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
       setNotice('La calificación debe estar entre 1 y 5.');
+      return;
+    }
+    if (isDemo) {
+      addDemoReview({
+        id: `demo-rev-${Date.now()}`,
+        place_id: data.place.id,
+        user_id: `demo-${demoRole}`,
+        author: demoName || 'Tú',
+        rating: stars,
+        body: body.trim(),
+        hidden: false,
+        created_at: new Date().toISOString(),
+        photos: photos.map((p) => p.uri),
+      });
+      setBody('');
+      setPhotos([]);
+      setNotice('Reseña publicada.');
+      showToast('Reseña publicada.', 'success');
       return;
     }
     lock.current = true;
@@ -133,8 +176,8 @@ export function LiveReviews() {
     try {
       const created = (await createRecord(
         'reviews',
-        { place_id: data.place.id, user_id: session.user.id, rating: stars, body: body.trim() },
-        'Publicando reseña en Render…',
+        { place_id: data.place.id, user_id: session!.user.id, rating: stars, body: body.trim() },
+        'Publicando reseña…',
       )) as { id?: string };
 
       let uploadedCount = 0;
@@ -152,9 +195,9 @@ export function LiveReviews() {
 
       const message =
         uploadErrors.length > 0
-          ? `Reseña publicada (${uploadedCount}/${photos.length} fotos subidas: ${uploadErrors[0]}).`
+          ? `Reseña publicada (${uploadedCount}/${photos.length} fotos subidas).`
           : uploadedCount > 0
-            ? `Reseña y ${uploadedCount} foto(s) comprimidas publicadas.`
+            ? `Reseña y ${uploadedCount} foto(s) publicadas.`
             : 'Reseña publicada.';
 
       setBody('');
@@ -171,10 +214,16 @@ export function LiveReviews() {
   }
 
   async function saveEdit(reviewId: string) {
-    if (!session || lock.current || !editBody.trim()) return;
+    if ((!session && !isDemo) || lock.current || !editBody.trim()) return;
     const stars = Number(editRating);
     if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
       setNotice('La calificación debe estar entre 1 y 5.');
+      return;
+    }
+    if (isDemo && reviewId.startsWith('demo-rev-')) {
+      updateDemoReview(reviewId, { rating: stars, body: editBody.trim() });
+      setEditingId(null);
+      showToast('Reseña actualizada.', 'success');
       return;
     }
     lock.current = true;
@@ -182,7 +231,7 @@ export function LiveReviews() {
     try {
       await updateRecord('reviews', reviewId, { rating: stars, body: editBody.trim() }, 'Actualizando reseña…');
       setEditingId(null);
-      showToast('Reseña actualizada en Render.', 'success');
+      showToast('Reseña actualizada.', 'success');
       retry();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo actualizar.', 'error');
@@ -193,7 +242,7 @@ export function LiveReviews() {
   }
 
   async function removeReview(reviewId: string) {
-    if (!session || lock.current) return;
+    if ((!session && !isDemo) || lock.current) return;
     const ok = await confirmAction({
       title: 'Eliminar reseña',
       message: '¿Eliminar permanentemente esta reseña y sus adjuntos?',
@@ -201,11 +250,16 @@ export function LiveReviews() {
       destructive: true,
     });
     if (!ok) return;
+    if (isDemo && reviewId.startsWith('demo-rev-')) {
+      deleteDemoReview(reviewId);
+      showToast('Reseña eliminada.', 'success');
+      return;
+    }
     lock.current = true;
     setBusy(true);
     try {
       await deleteRecord('reviews', reviewId, 'Eliminando reseña…');
-      showToast('Reseña eliminada de Render.', 'success');
+      showToast('Reseña eliminada.', 'success');
       retry();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo eliminar.', 'error');
@@ -216,14 +270,32 @@ export function LiveReviews() {
   }
 
   async function reportReview(reviewId: string) {
-    if (!session || !data?.place || !reportReason.trim() || lock.current) return;
+    if ((!session && !isDemo) || !data?.place || !reportReason.trim() || lock.current) return;
+    if (isDemo) {
+      addDemoTicket({
+        id: createDemoId('demo-tk'),
+        user_id: `demo-${demoRole}`,
+        place_id: data.place.id,
+        review_id: reviewId,
+        kind: 'review',
+        priority: 'medium',
+        status: 'pending',
+        subject: `Reporte de reseña en ${data.place.name}`,
+        description: reportReason.trim(),
+        created_at: new Date().toISOString(),
+      });
+      setReportingReviewId(null);
+      setReportReason('');
+      showToast('Reporte enviado al equipo de moderación.', 'success');
+      return;
+    }
     lock.current = true;
     setBusy(true);
     try {
       await createRecord(
         'tickets',
         {
-          user_id: session.user.id,
+          user_id: session!.user.id,
           place_id: data.place.id,
           review_id: reviewId,
           kind: 'review',
@@ -267,13 +339,13 @@ export function LiveReviews() {
       ) : null}
 
       {rows?.map((row) => {
-        const isMine = row.user_id === session?.user.id;
+        const isMine = session ? row.user_id === session.user.id : isDemo && row.user_id === `demo-${demoRole}`;
         const replies = (data?.replies ?? []).filter((rep) => rep.review_id === row.id);
         const mediaRows = (data?.media ?? []).filter((m) => m.review_id === row.id);
         return (
           <View key={row.id} style={styles.reviewWrap}>
             <ReviewCard
-              author={isMine ? 'Tú' : 'Visitante'}
+              author={isMine ? 'Tú' : String(row.author || 'Visitante')}
               rating={`${row.rating}/5`}
               comment={String(row.body)}
               visitDate={row.created_at ? new Date(String(row.created_at)).toLocaleDateString() : undefined}
@@ -309,7 +381,7 @@ export function LiveReviews() {
                   <FormField label="Calificación (1 a 5)" value={editRating} onChangeText={setEditRating} keyboardType="number-pad" />
                   <FormField label="Tu comentario" value={editBody} onChangeText={setEditBody} multiline />
                   <View style={styles.row}>
-                    <Button title="Guardar (PATCH)" size="sm" disabled={busy} onPress={() => { void saveEdit(row.id); }} />
+                    <Button title="Guardar cambios" size="sm" disabled={busy} onPress={() => { void saveEdit(row.id); }} />
                     <Button title="Cancelar" size="sm" variant="secondary" onPress={() => setEditingId(null)} />
                   </View>
                 </View>
@@ -329,7 +401,7 @@ export function LiveReviews() {
                   <Button title="Eliminar" size="sm" variant="soft" disabled={busy} onPress={() => { void removeReview(row.id); }} />
                 </View>
               )
-            ) : session ? (
+            ) : session || isDemo ? (
               <View style={{ gap: 6 }}>
                 <Button
                   title={reportingReviewId === row.id ? 'Cancelar reporte' : 'Reportar reseña'}
@@ -361,7 +433,7 @@ export function LiveReviews() {
 
       {data?.place && !rows?.length ? <AppText>Aún no hay reseñas publicadas.</AppText> : null}
 
-      {data?.place && session ? (
+      {data?.place && (session || isDemo) ? (
         <View style={styles.card}>
           <View style={styles.row}>
             <AppText variant="section" style={{ flex: 1 }}>Escribe tu reseña</AppText>
@@ -428,7 +500,7 @@ export function LiveReviews() {
               ))}
             </View>
           ) : null}
-          <Button title="Publicar reseña (POST)" disabled={busy || !body.trim()} onPress={publish} />
+          <Button title="Publicar reseña" disabled={busy || !body.trim()} onPress={publish} />
         </View>
       ) : data?.place ? (
         <Button title="Iniciar sesión para reseñar" onPress={() => router.navigate('/login')} />

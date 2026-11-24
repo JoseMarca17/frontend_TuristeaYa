@@ -1,66 +1,86 @@
-import { Ionicons } from '@expo/vector-icons';
+import { useState } from 'react';
 import { router } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { DemoAccessModal } from '@/components/auth/demo-access-modal';
 import { AppText } from '@/components/ui/app-text';
 import { selectEffectiveRole, useAuthStore } from '@/stores/use-auth-store';
-import { colors, radius, spacing } from '@/theme';
+import { borderWidth, colors, radius, spacing } from '@/theme';
 
 const roleNames: Record<string, string> = {
-  guest: 'Invitado (solo lectura)',
+  guest: 'Invitado',
   tourist: 'Turista',
   vip: 'Turista VIP',
-  advertiser: 'Negocio / Anunciante',
-  support: 'Soporte técnico',
+  advertiser: 'Negocio',
+  support: 'Soporte',
   admin: 'Administrador',
 };
 
-/** Muestra el modo actual (Render JWT real, Vista Demo o Invitado) y acceso rápido a cambiar rol. */
+/** Banda compacta de sesión o vista demo activa. Invisible para visitantes sin sesión. */
 export function RoleBanner() {
   const session = useAuthStore((s) => s.session);
   const demoRole = useAuthStore((s) => s.demoRole);
-  const demoAccount = useAuthStore((s) => s.demoAccount);
   const profile = useAuthStore((s) => s.profile);
+  const logout = useAuthStore((s) => s.logout);
   const effectiveRole = useAuthStore(selectEffectiveRole);
+  const [switchOpen, setSwitchOpen] = useState(false);
 
   const isDemo = Boolean(demoRole && !session);
   const isReal = Boolean(session);
 
+  if (!isDemo && !isReal) {
+    return null;
+  }
+
   return (
-    <View style={[styles.banner, isDemo ? styles.demoBanner : isReal ? styles.realBanner : styles.guestBanner]}>
-      <View style={styles.left}>
-        <Ionicons
-          name={isDemo ? 'flask-outline' : isReal ? 'cloud-done-outline' : 'person-outline'}
-          size={18}
-          color={isDemo ? '#92400e' : isReal ? colors.primary : colors.inkSoft}
-        />
-        <View style={styles.textWrap}>
-          <AppText variant="label" style={styles.title} numberOfLines={1}>
-            {isDemo
-              ? `Vista Demo · ${roleNames[effectiveRole]}`
-              : isReal
-                ? `${profile?.full_name || session?.user.email || 'Cuenta'} · ${roleNames[effectiveRole]}`
-                : roleNames.guest}
-          </AppText>
-          <AppText variant="micro" color="inkSoft" numberOfLines={2}>
-            {isDemo
-              ? `Modo vista previa (${demoAccount?.email}). Para escrituras reales en Render inicia sesión con un usuario de ese rol.`
-              : isReal
-                ? 'Conectado a Render · POST / PATCH / DELETE habilitados según tu rol.'
-                : 'Explora libremente. Inicia sesión o elige un usuario demo para guardar y editar en Render.'}
-          </AppText>
+    <>
+      <View style={[styles.banner, isDemo ? styles.demoBanner : styles.realBanner]}>
+        <AppText variant="caption" style={styles.title} numberOfLines={1}>
+          {isDemo
+            ? `Vista Demo · ${roleNames[effectiveRole]}`
+            : `${profile?.full_name || session?.user.email || 'Cuenta'} · ${roleNames[effectiveRole]}`}
+        </AppText>
+        <View style={styles.actions}>
+          {isDemo ? (
+            <>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Cambiar rol demo"
+                onPress={() => setSwitchOpen(true)}
+                style={styles.pillBtn}
+              >
+                <AppText variant="micro" color="primary" style={styles.pillText}>
+                  Cambiar vista
+                </AppText>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Salir de vista demo"
+                onPress={() => {
+                  void logout().then(() => router.replace('/'));
+                }}
+                style={styles.pillBtn}
+              >
+                <AppText variant="micro" color="inkSoft">
+                  Salir
+                </AppText>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Ir a cuenta"
+              onPress={() => router.navigate('/turista/perfil')}
+              style={styles.pillBtn}
+            >
+              <AppText variant="micro" color="primary" style={styles.pillText}>
+                Cuenta
+              </AppText>
+            </Pressable>
+          )}
         </View>
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Cambiar cuenta o rol"
-        onPress={() => router.navigate('/login')}
-        style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-      >
-        <AppText variant="caption" style={styles.actionText}>
-          {isReal || isDemo ? 'Cambiar' : 'Entrar'}
-        </AppText>
-      </Pressable>
-    </View>
+      <DemoAccessModal visible={switchOpen} onClose={() => setSwitchOpen(false)} />
+    </>
   );
 }
 
@@ -70,49 +90,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
-    borderRadius: radius.md,
-    borderWidth: 1,
+    borderRadius: radius.sm,
+    borderWidth: borderWidth.hairline,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
+    paddingVertical: spacing.xs + 2,
   },
   realBanner: {
-    backgroundColor: colors.surfaceGreen,
+    backgroundColor: colors.surfaceGreenSoft,
     borderColor: colors.borderGreen,
   },
   demoBanner: {
     backgroundColor: colors.highlight,
     borderColor: colors.borderHighlight,
   },
-  guestBanner: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-  },
-  left: {
+  title: {
     flex: 1,
+    color: colors.ink,
+    fontWeight: '600',
+  },
+  actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
-  textWrap: {
-    flex: 1,
-    gap: 1,
-  },
-  title: {
-    color: colors.ink,
-  },
-  action: {
+  pillBtn: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.borderGreen,
     borderRadius: radius.sm,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: 6,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderAlt,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
   },
-  actionPressed: {
-    backgroundColor: colors.surfaceGreenAlt,
-  },
-  actionText: {
-    color: colors.primary,
+  pillText: {
     fontWeight: '700',
   },
 });

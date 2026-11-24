@@ -18,11 +18,10 @@ import { assertCanChangeUserRole } from '@/services/domain-rules';
 import { createRecord, deleteRecord, requireRole, updateRecord } from '@/services/management';
 import {
   auditEntries as demoAudits,
-  managedUsers as demoUsers,
   reportedReview as demoReview,
-  verificationRequest as demoVerification,
 } from '@/services/mock/admin';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
 
@@ -48,6 +47,7 @@ const sections = [
 export function AdminPanel() {
   const session = useAuthStore((s) => s.session);
   const demoRole = useAuthStore((s) => s.demoRole);
+  const demoStore = useDemoStore();
   const showToast = useUiStore((s) => s.showToast);
 
   const [entity, setEntity] = useState<string>('user-access');
@@ -82,11 +82,18 @@ export function AdminPanel() {
 
   const load = useCallback(async (signal: AbortSignal): Promise<CatalogRow[]> => {
     if (isDemo) {
-      if (entity === 'user-access') return demoUsers.map((u, i) => ({ id: `demo-ua-${i}`, user_id: `demo-u-${i}`, display_name: u.name, role: 'support', status: 'active' }));
-      if (entity === 'business-verifications') return [{ id: 'demo-bv-1', responsible_name: demoVerification.owner, status: 'pending', review_notes: demoVerification.observations }];
+      if (entity === 'user-access') return demoStore.userAccess;
+      if (entity === 'business-verifications') return demoStore.verifications;
+      if (entity === 'tickets') return demoStore.tickets;
+      if (entity === 'places') return demoStore.places;
+      if (entity === 'promotions') return demoStore.promotions;
+      if (entity === 'businesses') return demoStore.businesses;
+      if (entity === 'experiences') return demoStore.experiences;
+      if (entity === 'moderation-actions') return demoStore.moderationActions;
       if (entity === 'reviews') {
         const publicReviews = await listRecords('reviews', { signal }).catch(() => []);
-        return publicReviews.length ? publicReviews : [{ id: demoReview.id, body: demoReview.reason, rating: 2, hidden: false }];
+        const combined = [...demoStore.reviews.map((r) => ({ ...r }) as unknown as CatalogRow), ...publicReviews];
+        return combined.length ? combined : [{ id: demoReview.id, body: demoReview.reason, rating: 2, hidden: false }];
       }
       if (entity === 'audit-logs') return demoAudits.map((a) => ({ id: a.id, action: a.label, created_at: a.time }));
       return listRecords(entity, { signal }).catch(() => []);
@@ -117,19 +124,36 @@ export function AdminPanel() {
       }));
     }
     return rows;
-  }, [entity, session, isDemo]);
+  }, [entity, session, isDemo, demoStore.userAccess, demoStore.verifications, demoStore.tickets, demoStore.places, demoStore.promotions, demoStore.businesses, demoStore.experiences, demoStore.moderationActions, demoStore.reviews]);
 
   const { data, loading, error, retry } = useRemoteData(load);
 
   async function confirmPatch() {
     if (!pending || lock.current) return;
     if (isDemo) {
+      if (entity === 'user-access') demoStore.updateUserAccess(pending.id, pending.body);
+      else if (entity === 'business-verifications') demoStore.upsertEntityRow('verifications', { id: pending.id, ...pending.body });
+      else if (entity === 'tickets') demoStore.updateTicket(pending.id, pending.body);
+      else if (entity === 'places' || entity === 'promotions' || entity === 'businesses' || entity === 'experiences') {
+        demoStore.upsertEntityRow(entity, { id: pending.id, ...pending.body });
+      } else if (entity === 'reviews') {
+        demoStore.updateReview(pending.id, pending.body as { hidden?: boolean });
+        if ('hidden' in pending.body) {
+          demoStore.addModerationAction({
+            id: `demo-mod-${Date.now()}`,
+            review_id: pending.id,
+            action: pending.body.hidden ? 'hide' : 'restore',
+            reason: 'Moderación administrativa',
+            created_at: new Date().toISOString(),
+          });
+        }
+      }
       setDemoPatched((prev) => ({
         ...prev,
         [entity]: { ...(prev[entity] || {}), [pending.id]: { ...(prev[entity]?.[pending.id] || {}), ...pending.body } },
       }));
       setPending(null);
-      showToast(`${pending.label} (simulado en Vista Demo)`, 'info');
+      showToast(`${pending.label}`, 'success');
       return;
     }
     lock.current = true;
@@ -160,15 +184,23 @@ export function AdminPanel() {
   async function handleDelete(id: string) {
     const ok = await confirmAction({
       title: 'Confirmar eliminación administrativa',
-      message: 'Esta acción eliminará el registro de Render permanentemente.',
+      message: 'Esta acción eliminará el registro permanentemente.',
       confirmLabel: 'Eliminar',
       destructive: true,
     });
     if (!ok) return;
     if (isDemo) {
+      if (entity === 'tickets') demoStore.deleteTicket(id);
+      else if (entity === 'places' || entity === 'promotions' || entity === 'businesses' || entity === 'experiences') {
+        demoStore.deleteEntityRow(entity, id);
+      } else if (entity === 'business-verifications') {
+        demoStore.deleteEntityRow('verifications', id);
+      } else if (entity === 'reviews') {
+        demoStore.deleteReview(id);
+      }
       setDemoDeleted((prev) => ({ ...prev, [entity]: [...(prev[entity] || []), id] }));
       setConfirmDeleteId(null);
-      showToast('Eliminado en Vista Demo local.', 'info');
+      showToast('Registro eliminado.', 'info');
       return;
     }
     if (lock.current) return;
@@ -332,15 +364,17 @@ export function AdminPanel() {
 
       {metrics ? (
         <View style={styles.formCard}>
-          <AppText variant="section">Métricas generales de la plataforma</AppText>
-          <View style={styles.btnRow}>
-            <Badge label={`Usuarios: ${metrics.users}`} tone="green" />
-            <Badge label={`Lugares pub.: ${metrics.publishedPlaces}`} tone="green" />
-            <Badge label={`Borradores: ${metrics.draftPlaces}`} tone="cream" />
-            <Badge label={`Tickets abiertos: ${metrics.openTickets}`} tone="cream" />
-            <Badge label={`Verificaciones: ${metrics.pendingVerifications}`} tone="cream" />
-            <Badge label={`Reseñas ocultas: ${metrics.hiddenReviews}`} tone="cream" />
-          </View>
+          <AppText variant="section">Resumen de plataforma</AppText>
+          <AppText variant="bodySmall" color="inkSoft">
+            Usuarios: {metrics.users} · Lugares activos: {metrics.publishedPlaces} (borradores: {metrics.draftPlaces}) · Tickets abiertos: {metrics.openTickets} · Verificaciones: {metrics.pendingVerifications} · Reseñas ocultas: {metrics.hiddenReviews}
+          </AppText>
+        </View>
+      ) : isDemo ? (
+        <View style={styles.formCard}>
+          <AppText variant="section">Resumen de plataforma</AppText>
+          <AppText variant="bodySmall" color="inkSoft">
+            Usuarios: {demoStore.userAccess.length} · Comercios: {demoStore.businesses.length} · Lugares: {demoStore.places.length} · Tickets: {demoStore.tickets.filter((t) => t.status !== 'resolved').length} · Verificaciones: {demoStore.verifications.filter((v) => v.status === 'pending').length}
+          </AppText>
         </View>
       ) : null}
 
@@ -424,15 +458,7 @@ export function AdminPanel() {
             </>
           ) : null}
           {formError ? <AppText accessibilityRole="alert" variant="caption" style={{ color: '#b91c1c' }}>{formError}</AppText> : null}
-          <Button title={busy ? 'Guardando…' : editingRowId ? 'Actualizar registro (PATCH)' : 'Guardar nuevo registro (POST)'} disabled={busy} onPress={() => { void handleCreate(); }} />
-        </View>
-      ) : null}
-
-      {isDemo ? (
-        <View style={styles.demoNoticeBox}>
-          <AppText variant="micro" color="inkSoft">
-            Modo Vista Demo: los botones Crear (POST), Actualizar (PATCH) y Eliminar (DELETE) modifican esta vista localmente. Para ejecutar POST reales contra Render en Administración se requiere iniciar sesión con una cuenta que tenga rol «admin» en Supabase.
-          </AppText>
+          <Button title={busy ? 'Guardando…' : editingRowId ? 'Actualizar registro' : 'Guardar registro'} disabled={busy} onPress={() => { void handleCreate(); }} />
         </View>
       ) : null}
 

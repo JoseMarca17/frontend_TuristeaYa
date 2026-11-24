@@ -20,8 +20,9 @@ import {
   TICKET_STATUS_OPTIONS,
 } from '@/services/domain-rules';
 import { createRecord, deleteRecord, requireRole, updateRecord } from '@/services/management';
-import { tickets as demoTickets } from '@/services/mock/support';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useCouponStore } from '@/stores/use-coupon-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
 import { TicketConversation } from './ticket-conversation';
@@ -48,7 +49,16 @@ const kindLabels: Record<string, string> = {
 export function SupportPanel() {
   const session = useAuthStore((s) => s.session);
   const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && (demoRole === 'support' || demoRole === 'admin');
   const showToast = useUiStore((s) => s.showToast);
+
+  const demoTickets = useDemoStore((s) => s.tickets);
+  const demoRoutes = useDemoStore((s) => s.routes);
+  const demoReservations = useDemoStore((s) => s.reservations);
+  const updateDemoTicket = useDemoStore((s) => s.updateTicket);
+  const deleteDemoTicket = useDemoStore((s) => s.deleteTicket);
+  const addDemoNotification = useDemoStore((s) => s.addNotification);
+  const demoRedemptions = useCouponStore((s) => s.redemptions);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -66,23 +76,9 @@ export function SupportPanel() {
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
 
-  const isDemo = !session && (demoRole === 'support' || demoRole === 'admin');
-
   const load = useCallback(async (signal: AbortSignal) => {
     if (isDemo) {
-      return {
-        tickets: demoTickets.map((t, idx) => ({
-          id: t.id,
-          user_id: 'demo-tourist',
-          redemption_id: idx === 0 ? 'demo-redemption-1' : null,
-          kind: idx === 0 ? 'coupon' : 'other',
-          subject: t.subject,
-          description: t.verification,
-          status: t.status === 'Pendiente' ? 'pending' : t.status === 'En curso' ? 'in_progress' : 'resolved',
-          priority: t.priority === 'Alta' ? 'high' : t.priority === 'Media' ? 'medium' : 'low',
-        })) as CatalogRow[],
-        audits: [] as CatalogRow[],
-      };
+      return { tickets: demoTickets, audits: [] as CatalogRow[] };
     }
     if (!session) throw new Error('Inicia sesión con una cuenta de soporte o administrador.');
     await requireRole(['admin', 'support'], signal);
@@ -91,13 +87,14 @@ export function SupportPanel() {
       listRecords('audit-logs', { private: true, signal }).catch(() => []),
     ]);
     return { tickets, audits };
-  }, [session, isDemo]);
+  }, [session, isDemo, demoTickets]);
 
   const { data, loading, error, retry } = useRemoteData(load);
 
   async function patchTicket(id: string, body: Record<string, unknown>, successMsg: string) {
     if (isDemo) {
-      showToast(`${successMsg} (Vista Demo)`, 'info');
+      updateDemoTicket(id, body);
+      showToast(successMsg, 'success');
       return;
     }
     if (lock.current) return;
@@ -105,7 +102,7 @@ export function SupportPanel() {
     setBusy(true);
     setNotice('');
     try {
-      await updateRecord('tickets', id, body, 'Actualizando ticket en Render…');
+      await updateRecord('tickets', id, body, 'Actualizando ticket…');
       showToast(successMsg, 'success');
       retry();
     } catch (err) {
@@ -124,7 +121,13 @@ export function SupportPanel() {
     }
     if (isDemo) {
       setHistoryUserId(userId);
-      setUserHistory({ name: 'María Turista Demo', tickets: 2, redemptions: 3, reservations: 1, routes: 4 });
+      setUserHistory({
+        name: 'Historial de usuario demo',
+        tickets: demoTickets.filter((t) => t.user_id === userId).length,
+        redemptions: demoRedemptions.length,
+        reservations: demoReservations.length,
+        routes: demoRoutes.length,
+      });
       return;
     }
     setBusy(true);
@@ -151,28 +154,38 @@ export function SupportPanel() {
   }
 
   async function resolveCouponDispute(ticket: CatalogRow, approved: boolean) {
+    const status = 'resolved';
+    const meta = buildCouponNotificationMetadata({
+      redemption_id: ticket.redemption_id ? String(ticket.redemption_id) : null,
+      error_code: approved ? null : 'DISPUTE_REJECTED',
+      error_reason: approved ? 'Disputa aprobada por Soporte' : 'Disputa rechazada por Soporte',
+      severity: approved ? 'info' : 'warning',
+    });
     if (isDemo) {
-      showToast(`Disputa ${approved ? 'aprobada' : 'rechazada'} y notificada (Vista Demo).`, 'info');
+      updateDemoTicket(ticket.id, { status });
+      addDemoNotification({
+        id: `demo-notif-${Date.now()}`,
+        user_id: String(ticket.user_id || 'demo-tourist'),
+        ticket_id: ticket.id,
+        title: approved ? 'Disputa de cupón aprobada' : 'Resolución de disputa de cupón',
+        body: approved ? 'Soporte validó tu canje.' : 'Tu disputa fue cerrada sin ajuste.',
+        read_at: null,
+        created_at: new Date().toISOString(),
+      });
+      showToast('Disputa resuelta y notificada.', 'success');
       return;
     }
     if (lock.current) return;
     lock.current = true;
     setBusy(true);
     try {
-      const status = 'resolved';
-      const meta = buildCouponNotificationMetadata({
-        redemption_id: ticket.redemption_id ? String(ticket.redemption_id) : null,
-        error_code: approved ? null : 'DISPUTE_REJECTED',
-        error_reason: approved ? 'Disputa aprobada por Soporte' : 'Disputa rechazada por Soporte',
-        severity: approved ? 'info' : 'warning',
-      });
       await updateRecord('tickets', ticket.id, { status }, 'Resolviendo disputa de cupón…');
       await createRecord('notifications', {
         user_id: ticket.user_id,
         ticket_id: ticket.id,
         title: approved ? 'Disputa de cupón aprobada' : 'Resolución de disputa de cupón',
         body: `${approved ? 'Soporte validó tu canje.' : 'Tu disputa fue cerrada sin ajuste.'} ${JSON.stringify(meta)}`,
-      }).catch(() => {});
+      }).catch(() => { });
       showToast('Disputa resuelta y notificada.', 'success');
       retry();
     } catch (err) {
@@ -192,7 +205,8 @@ export function SupportPanel() {
     });
     if (!ok) return;
     if (isDemo) {
-      showToast('Eliminación simulada en Vista Demo.', 'info');
+      deleteDemoTicket(id);
+      showToast('Ticket eliminado.', 'info');
       return;
     }
     if (lock.current) return;
@@ -200,7 +214,7 @@ export function SupportPanel() {
     setBusy(true);
     try {
       await deleteRecord('tickets', id, 'Eliminando ticket…');
-      showToast('Ticket eliminado de Render.', 'success');
+      showToast('Ticket eliminado.', 'success');
       retry();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo eliminar.', 'error');
@@ -213,8 +227,17 @@ export function SupportPanel() {
   async function sendUserNotification(ticket: CatalogRow) {
     if (!notifyText.trim()) return;
     if (isDemo) {
+      addDemoNotification({
+        id: `demo-notif-${Date.now()}`,
+        user_id: String(ticket.user_id || 'demo-tourist'),
+        ticket_id: ticket.id,
+        title: `Actualización sobre: ${ticket.subject}`,
+        body: notifyText.trim(),
+        read_at: null,
+        created_at: new Date().toISOString(),
+      });
       setNotifyText('');
-      showToast('Notificación enviada al usuario y comercio (Vista Demo).', 'info');
+      showToast('Aviso enviado al usuario.', 'success');
       return;
     }
     if (lock.current) return;
@@ -229,10 +252,10 @@ export function SupportPanel() {
           title: `Actualización sobre: ${ticket.subject}`,
           body: notifyText.trim(),
         },
-        'Enviando notificación al usuario…',
+        'Enviando aviso al usuario…',
       );
       setNotifyText('');
-      showToast('Notificación enviada al usuario.', 'success');
+      showToast('Aviso enviado al usuario.', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo notificar.', 'error');
     } finally {
@@ -241,7 +264,7 @@ export function SupportPanel() {
     }
   }
 
-  const tickets = data?.tickets ?? [];
+  const tickets = isDemo ? demoTickets : data?.tickets ?? [];
   const filtered = tickets.filter((t) => {
     const statusOk = statusFilter === 'all' || t.status === statusFilter;
     const rawKind = String(t.kind || 'other');
@@ -250,7 +273,7 @@ export function SupportPanel() {
   });
 
   return (
-    <Screen title="Tickets de soporte" subtitle="Atención, disputas de cupones y seguimiento en tiempo real">
+    <Screen title="Tickets de soporte" subtitle="Atención, disputas de cupones y seguimiento">
       <RoleBanner />
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
@@ -277,24 +300,23 @@ export function SupportPanel() {
           <ListCard
             key={ticket.id}
             title={String(ticket.subject)}
-            body={`${ticket.kind || 'general'} · ${statusLabels[String(ticket.status)] || ticket.status} · Prioridad: ${ticket.priority}\n${ticket.description || ''}`}
+            body={`${statusLabels[String(ticket.status)] || ticket.status} · Prioridad: ${ticket.priority}\n${ticket.description || ''}`}
             footer={
               <View style={{ gap: spacing.xs + 2, marginTop: 4 }}>
                 <View style={styles.chipRow}>
-                  <Badge label={`Estado: ${statusLabels[String(ticket.status)] || ticket.status}`} tone={ticket.status === 'resolved' ? 'green' : 'cream'} />
-                  <Badge label={`Prioridad: ${ticket.priority}`} tone={ticket.priority === 'critical' || ticket.priority === 'high' ? 'cream' : 'green'} />
+                  <Badge label={statusLabels[String(ticket.status)] || String(ticket.status)} tone={ticket.status === 'resolved' ? 'green' : 'cream'} />
                   {isDispute ? <Badge label="Disputa de cupón" tone="cream" /> : null}
                 </View>
 
                 <View style={styles.chipRow}>
                   <Button
-                    title={selected === ticket.id ? 'Cerrar caso' : 'Gestionar caso y chat'}
+                    title={selected === ticket.id ? 'Cerrar caso' : 'Gestionar caso'}
                     size="sm"
                     onPress={() => setSelected(selected === ticket.id ? null : ticket.id)}
                   />
                   {ticket.user_id ? (
                     <Button
-                      title={historyUserId === ticket.user_id ? 'Ocultar historial' : 'Historial usuario'}
+                      title={historyUserId === ticket.user_id ? 'Ocultar historial' : 'Historial'}
                       size="sm"
                       variant="secondary"
                       onPress={() => { void loadUserHistory(String(ticket.user_id)); }}
@@ -304,7 +326,7 @@ export function SupportPanel() {
 
                 {historyUserId === ticket.user_id && userHistory ? (
                   <View style={styles.historyCard}>
-                    <AppText variant="label" color="primary">Historial consolidado: {userHistory.name}</AppText>
+                    <AppText variant="label" color="primary">{userHistory.name}</AppText>
                     <AppText variant="caption">
                       Tickets: {userHistory.tickets} · Canjes: {userHistory.redemptions} · Reservas: {userHistory.reservations} · Rutas: {userHistory.routes}
                     </AppText>
@@ -317,15 +339,15 @@ export function SupportPanel() {
 
                     {isDispute ? (
                       <View style={styles.disputeBox}>
-                        <AppText variant="label" color="primary">Flujo de disputa de cupón</AppText>
+                        <AppText variant="label" color="primary">Resolución de disputa</AppText>
                         <View style={styles.chipRow}>
-                          <Button title="Aprobar disputa y notificar" size="sm" disabled={busy} onPress={() => { void resolveCouponDispute(ticket, true); }} />
+                          <Button title="Aprobar disputa" size="sm" disabled={busy} onPress={() => { void resolveCouponDispute(ticket, true); }} />
                           <Button title="Rechazar disputa" size="sm" variant="secondary" disabled={busy} onPress={() => { void resolveCouponDispute(ticket, false); }} />
                         </View>
                       </View>
                     ) : null}
 
-                    <AppText variant="label">Cambiar estado (PATCH)</AppText>
+                    <AppText variant="label">Estado del caso</AppText>
                     <View style={styles.chipRow}>
                       {TICKET_STATUS_OPTIONS.map((status) => (
                         <Button
@@ -351,25 +373,25 @@ export function SupportPanel() {
                           onPress={() => { void patchTicket(ticket.id, { priority: p }, `Prioridad cambiada a ${p}.`); }}
                         />
                       ))}
-                      {session ? (
+                      {session || isDemo ? (
                         <Button
                           size="sm"
                           variant="soft"
-                          title={ticket.assigned_to === session.user.id ? 'Asignado a mí' : 'Asignarme caso'}
-                          disabled={busy || ticket.assigned_to === session.user.id}
-                          onPress={() => { void patchTicket(ticket.id, { assigned_to: session.user.id }, 'Caso asignado a tu usuario.'); }}
+                          title={ticket.assigned_to === (session?.user.id || 'demo-support') ? 'Asignado a mí' : 'Asignarme caso'}
+                          disabled={busy || ticket.assigned_to === (session?.user.id || 'demo-support')}
+                          onPress={() => { void patchTicket(ticket.id, { assigned_to: session?.user.id || 'demo-support' }, 'Caso asignado.'); }}
                         />
                       ) : null}
                     </View>
 
                     <FormField
-                      label="Notificar al usuario (POST /notifications)"
+                      label="Enviar aviso al usuario"
                       value={notifyText}
                       onChangeText={setNotifyText}
                       placeholder="Ej. Ya revisamos tu caso con el comercio."
                     />
                     <Button
-                      title="Enviar notificación"
+                      title="Enviar aviso"
                       size="sm"
                       variant="secondary"
                       disabled={busy || !notifyText.trim()}
@@ -378,11 +400,11 @@ export function SupportPanel() {
 
                     {(data?.audits || []).length > 0 ? (
                       <AppText variant="micro" color="inkSoft">
-                        Registros de auditoría recientes: {data?.audits.slice(0, 3).map((a) => String(a.action || a.id)).join(' · ')}
+                        Auditoría reciente: {data?.audits.slice(0, 3).map((a) => String(a.action || a.id)).join(' · ')}
                       </AppText>
                     ) : null}
 
-                    <Button title="Eliminar ticket (DELETE)" size="sm" variant="soft" disabled={busy} onPress={() => { void removeTicket(ticket.id); }} />
+                    <Button title="Eliminar caso" size="sm" variant="soft" disabled={busy} onPress={() => { void removeTicket(ticket.id); }} />
                   </View>
                 ) : null}
               </View>
@@ -392,7 +414,7 @@ export function SupportPanel() {
       })}
 
       <Button title="Actualizar casos" variant="secondary" disabled={loading || busy} onPress={retry} />
-      <Button title="Volver a inicio turista" variant="soft" onPress={() => router.replace('/turista')} />
+      <Button title="Volver al inicio" variant="soft" onPress={() => router.replace('/turista')} />
     </Screen>
   );
 }

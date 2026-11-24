@@ -28,10 +28,9 @@ import { uploadPlaceMedia } from '@/services/media';
 import {
   businessNotifications as demoBizNotifs,
   businessProfile as demoBizProfile,
-  campaigns as demoCampaigns,
-  promotions as demoPromotions,
 } from '@/services/mock/business';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
 
@@ -206,18 +205,30 @@ function BusinessEditor({
       }
 
       if (isDemo) {
+        const entityMap: Record<string, 'businesses' | 'places' | 'promotions' | 'experiences' | 'campaigns' | 'verifications' | undefined> = {
+          data: 'businesses',
+          places: 'places',
+          promotions: 'promotions',
+          experiences: 'experiences',
+          campaigns: 'campaigns',
+          verification: 'verifications',
+        };
+        const demoKey = entityMap[mode];
         const demoRow: CatalogRow = {
           id: row?.id || `demo-${Date.now()}`,
           business_id: businessId,
           ...payload,
         };
-        showToast('Guardado en Vista Demo local (en Render requiere cuenta real).', 'info');
+        if (demoKey) {
+          useDemoStore.getState().upsertEntityRow(demoKey, demoRow);
+        }
+        showToast('Cambios guardados.', 'success');
         onSaved(demoRow, Boolean(row));
         return;
       }
 
       if (row) {
-        await updateRecord(entities[mode], row.id, payload, 'Actualizando en Render…');
+        await updateRecord(entities[mode], row.id, payload, 'Actualizando…');
       } else {
         await createRecord(
           entities[mode],
@@ -226,10 +237,10 @@ function BusinessEditor({
             business_id: businessId,
             ...(mode === 'campaigns' ? { placement: 'home' } : {}),
           },
-          'Creando registro en Render…',
+          'Guardando…',
         );
       }
-      showToast('Guardado en Render.', 'success');
+      showToast('Guardado.', 'success');
       onSaved();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'No se pudo guardar.');
@@ -289,7 +300,7 @@ function BusinessEditor({
       {notice ? <AppText accessibilityRole="alert" style={{ color: '#b91c1c' }}>{notice}</AppText> : null}
       <View style={styles.chipRow}>
         <View style={{ flex: 1 }}>
-          <Button title={busy ? 'Guardando…' : row ? 'Actualizar (PATCH)' : 'Crear (POST)'} disabled={busy} onPress={save} />
+          <Button title={busy ? 'Guardando…' : row ? 'Guardar cambios' : 'Crear'} disabled={busy} onPress={save} />
         </View>
         {onCancel ? (
           <Button title="Cancelar" variant="secondary" disabled={busy} onPress={onCancel} />
@@ -302,6 +313,7 @@ function BusinessEditor({
 export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
   const session = useAuthStore((s) => s.session);
   const demoRole = useAuthStore((s) => s.demoRole);
+  const demoStore = useDemoStore();
   const showToast = useUiStore((s) => s.showToast);
 
   const [subMode, setSubMode] = useState<Mode>(initialMode);
@@ -319,9 +331,6 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
   const [wizardOpen, setWizardOpen] = useState(initialMode === 'verification');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
-  const [demoAdded, setDemoAdded] = useState<Record<string, CatalogRow[]>>({});
-  const [demoPatched, setDemoPatched] = useState<Record<string, Record<string, CatalogRow>>>({});
-  const [demoDeleted, setDemoDeleted] = useState<string[]>([]);
   const lock = useRef(false);
 
   const isDemo = !session && demoRole === 'advertiser';
@@ -330,56 +339,33 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
     async (signal: AbortSignal) => {
       const zones = await listRecords('zones', { signal }).catch(() => []);
       if (isDemo) {
-        const [allBiz, allPlaces, allCategories] = await Promise.all([
-          listRecords('businesses', { signal }).catch(() => []),
-          listRecords('places', { signal }).catch(() => []),
+        const [allCategories, allReviews] = await Promise.all([
           listRecords('categories', { signal }).catch(() => []),
+          listRecords('reviews', { signal }).catch(() => []),
         ]);
-        const businesses = allBiz.length
-          ? allBiz.slice(0, 5)
-          : [{ id: 'demo-biz-1', owner_id: 'demo-advertiser', name: demoBizProfile.name, contact_email: 'negocio.demo@turisteaya.org', phone: '70011223' }];
+        const businesses = demoStore.businesses.length
+          ? demoStore.businesses
+          : [{ id: 'demo-biz-1', owner_id: 'demo-advertiser', name: demoBizProfile.name, contact_email: 'contacto@comercio.example', phone: '70011223' }];
         const business = businesses.find((b) => b.id === businessId) || businesses[0];
-        const myPlaces = allPlaces.filter((p) => p.business_id === business.id);
-        const places = myPlaces.length
-          ? myPlaces
-          : [{ id: 'demo-place-1', name: demoBizProfile.name, address: demoBizProfile.address, description: demoBizProfile.description, estimated_cost: 35, visit_minutes: 45, published: true }];
+        const places = demoStore.places.filter((p) => p.business_id === business.id);
         let rows: CatalogRow[] = [];
         let replies: CatalogRow[] = [];
-        let openingHours: CatalogRow[] = [];
-        let placeCats: CatalogRow[] = [];
-        let placeMedia: CatalogRow[] = [];
-        let campaignEvents: CatalogRow[] = [];
+        const openingHours: CatalogRow[] = [];
+        const placeCats: CatalogRow[] = [];
+        const placeMedia: CatalogRow[] = [];
+        const campaignEvents: CatalogRow[] = [];
 
-        if (mode === 'places') {
-          rows = places;
-          const [oh, pc, pm] = await Promise.all([
-            listRecords('opening-hours', { signal }).catch(() => []),
-            listRecords('place-categories', { signal }).catch(() => []),
-            listRecords('place-media', { signal }).catch(() => []),
-          ]);
-          const myPlaceIds = new Set(places.map((p) => p.id));
-          openingHours = oh.filter((h) => myPlaceIds.has(String(h.place_id)));
-          placeCats = pc.filter((l) => myPlaceIds.has(String(l.place_id)));
-          placeMedia = pm.filter((m) => myPlaceIds.has(String(m.place_id)));
-        } else if (mode === 'promotions') {
-          const promos = await listRecords('promotions', { signal }).catch(() => []);
-          const mine = promos.filter((p) => p.business_id === business.id);
-          rows = mine.length ? mine : demoPromotions.map((p) => ({ id: p.id, title: p.title, status: p.state.toLowerCase(), code: p.code, discount_percent: p.discountPct, conditions: p.conditions }));
-        } else if (mode === 'experiences') {
-          const exps = await listRecords('experiences', { signal }).catch(() => []);
-          rows = exps.filter((e) => e.business_id === business.id);
-        } else if (mode === 'campaigns') {
-          const camps = await listRecords('campaigns', { signal }).catch(() => []);
-          const mine = camps.filter((c) => c.business_id === business.id);
-          rows = mine.length ? mine : demoCampaigns.map((c) => ({ id: c.id, title: c.title, status: c.state.toLowerCase(), budget: c.budget, ad_text: c.space }));
-          campaignEvents = await listRecords('campaign-events', { signal }).catch(() => []);
-        } else if (mode === 'reviews') {
-          const [allReviews, allReplies] = await Promise.all([
-            listRecords('reviews', { signal }).catch(() => []),
-            listRecords('review-replies', { signal }).catch(() => []),
-          ]);
-          rows = allReviews.filter((r) => places.some((p) => p.id === r.place_id));
-          replies = allReplies.filter((rep) => rep.business_id === business.id);
+        if (mode === 'places') rows = places;
+        else if (mode === 'promotions') rows = demoStore.promotions.filter((p) => p.business_id === business.id);
+        else if (mode === 'experiences') rows = demoStore.experiences.filter((e) => e.business_id === business.id);
+        else if (mode === 'campaigns') rows = demoStore.campaigns.filter((c) => c.business_id === business.id);
+        else if (mode === 'verification') rows = demoStore.verifications.filter((v) => v.business_id === business.id);
+        else if (mode === 'reviews') {
+          rows = [
+            ...demoStore.reviews.map((r) => ({ ...r }) as unknown as CatalogRow),
+            ...allReviews.slice(0, 6),
+          ];
+          replies = demoStore.reviewReplies.map((r) => ({ ...r }) as unknown as CatalogRow);
         } else if (mode === 'notifications') {
           rows = demoBizNotifs.map((n) => ({ id: n.id, title: n.title, body: n.body }));
         }
@@ -437,22 +423,30 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
       }
       return { businesses, business, places: myPlaces, zones, rows, replies, categories, openingHours, placeCats, placeMedia, campaignEvents };
     },
-    [session, businessId, mode, isDemo],
+    [session, businessId, mode, isDemo, demoStore.businesses, demoStore.places, demoStore.promotions, demoStore.experiences, demoStore.campaigns, demoStore.verifications, demoStore.reviews, demoStore.reviewReplies],
   );
 
   const { data, loading, error, retry } = useRemoteData(load);
-  const deletedSet = new Set(demoDeleted);
-  const patches = demoPatched[mode] || {};
-  const visibleRows = data
-    ? isDemo
-      ? [...(demoAdded[mode] || []), ...data.rows]
-        .filter((r) => !deletedSet.has(r.id))
-        .map((r) => patches[r.id] ?? r)
-      : data.rows
-    : [];
+  const visibleRows = data ? data.rows : [];
 
   async function createBusiness() {
-    if (!session || lock.current || !newBizName.trim()) return;
+    if (lock.current || !newBizName.trim()) return;
+    if (isDemo) {
+      const id = `demo-biz-${Date.now()}`;
+      demoStore.upsertEntityRow('businesses', {
+        id,
+        owner_id: 'demo-advertiser',
+        name: newBizName.trim(),
+        contact_email: newBizEmail.trim() || 'contacto@comercio.example',
+        phone: newBizPhone.trim() || null,
+      });
+      setNewBizMode(false);
+      setNewBizName('');
+      setBusinessId(id);
+      showToast('Negocio registrado.', 'success');
+      return;
+    }
+    if (!session) return;
     lock.current = true;
     setBusy(true);
     setNotice('');
@@ -507,11 +501,15 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
 
   async function changeStatus(row: CatalogRow, patch: Record<string, unknown>) {
     if (isDemo) {
-      setDemoPatched((prev) => ({
-        ...prev,
-        [mode]: { ...(prev[mode] || {}), [row.id]: { ...row, ...patch } },
-      }));
-      showToast('Estado cambiado en Vista Demo.', 'info');
+      const entityMap: Record<string, 'places' | 'promotions' | 'experiences' | 'campaigns' | undefined> = {
+        places: 'places',
+        promotions: 'promotions',
+        experiences: 'experiences',
+        campaigns: 'campaigns',
+      };
+      const demoKey = entityMap[mode];
+      if (demoKey) demoStore.upsertEntityRow(demoKey, { ...row, ...patch });
+      showToast('Estado actualizado.', 'success');
       return;
     }
     if (lock.current) return;
@@ -532,9 +530,17 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
 
   async function removeRow(entity: string, id: string) {
     if (isDemo) {
-      setDemoDeleted((prev) => [...prev, id]);
+      const entityMap: Record<string, 'places' | 'promotions' | 'experiences' | 'campaigns' | 'verifications' | undefined> = {
+        places: 'places',
+        promotions: 'promotions',
+        experiences: 'experiences',
+        campaigns: 'campaigns',
+        'business-verifications': 'verifications',
+      };
+      const demoKey = entityMap[entity];
+      if (demoKey) demoStore.deleteEntityRow(demoKey, id);
       setConfirmDeleteId(null);
-      showToast('Eliminación simulada en Vista Demo.', 'info');
+      showToast('Registro eliminado.', 'info');
       return;
     }
     if (lock.current) return;
@@ -630,7 +636,7 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
   }
 
   return (
-    <Pantalla titulo={titles[mode]} subtitulo="Gestión completa de tu establecimiento en Render" tabs={TABS_NEGOCIO}>
+    <Pantalla titulo={titles[mode]} subtitulo="Gestión de tu establecimiento" tabs={TABS_NEGOCIO}>
       <RoleBanner />
 
       {!session && !isDemo ? <Button title="Iniciar sesión" onPress={() => router.navigate('/login')} /> : null}
@@ -661,33 +667,26 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
 
       {/* Selector de negocios + botón crear negocio */}
       {session || isDemo ? (
-        <>
-          <View style={styles.scopeNotice}>
-            <AppText variant="micro" color="inkSoft">
-              Alcance del rol Negocio: solo ves los lugares, cupones y campañas del establecimiento seleccionado (en Render cada dueño ve únicamente sus propios locales). El catálogo completo de la plataforma es visible en Turista o Administrador.
-            </AppText>
-          </View>
-          <View style={styles.chipRow}>
-            {data?.businesses.map((biz) => (
-              <Chip
-                key={biz.id}
-                label={String(biz.name)}
-                selected={data.business?.id === biz.id}
-                onPress={() => { setBusinessId(biz.id); setEdit(null); }}
-              />
-            ))}
-            {session ? <Chip label="+ Nuevo negocio" selected={newBizMode} onPress={() => setNewBizMode((v) => !v)} /> : null}
-          </View>
-        </>
+        <View style={styles.chipRow}>
+          {data?.businesses.map((biz) => (
+            <Chip
+              key={biz.id}
+              label={String(biz.name)}
+              selected={data.business?.id === biz.id}
+              onPress={() => { setBusinessId(biz.id); setEdit(null); }}
+            />
+          ))}
+          <Chip label="+ Nuevo negocio" selected={newBizMode} onPress={() => setNewBizMode((v) => !v)} />
+        </View>
       ) : null}
 
-      {newBizMode && session ? (
+      {newBizMode && (session || isDemo) ? (
         <View style={styles.editorCard}>
-          <AppText variant="section">Registrar nuevo establecimiento (POST /businesses)</AppText>
+          <AppText variant="section">Nuevo establecimiento</AppText>
           <FormField label="Nombre del negocio" value={newBizName} onChangeText={setNewBizName} placeholder="Ej. Café Mirador Sopocachi" />
-          <FormField label="Correo de contacto" value={newBizEmail} onChangeText={setNewBizEmail} placeholder={session.user.email} keyboardType="email-address" autoCapitalize="none" />
+          <FormField label="Correo de contacto" value={newBizEmail} onChangeText={setNewBizEmail} placeholder={session?.user.email || 'contacto@ejemplo.com'} keyboardType="email-address" autoCapitalize="none" />
           <FormField label="Teléfono (opcional)" value={newBizPhone} onChangeText={setNewBizPhone} keyboardType="phone-pad" />
-          <Button title={busy ? 'Creando…' : 'Crear negocio en Render'} disabled={busy || !newBizName.trim()} onPress={() => { void createBusiness(); }} />
+          <Button title={busy ? 'Creando…' : 'Guardar negocio'} disabled={busy || !newBizName.trim()} onPress={() => { void createBusiness(); }} />
         </View>
       ) : null}
 
@@ -796,24 +795,9 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
               places={data.places}
               zones={data.zones}
               isDemo={isDemo}
-              onSaved={(demoRow, isEdit) => {
-                if (isDemo && demoRow) {
-                  if (isEdit) {
-                    setDemoPatched((prev) => ({
-                      ...prev,
-                      [mode]: { ...(prev[mode] || {}), [demoRow.id]: demoRow },
-                    }));
-                  } else {
-                    setDemoAdded((prev) => ({
-                      ...prev,
-                      [mode]: [demoRow, ...(prev[mode] || [])],
-                    }));
-                  }
-                  setEdit(null);
-                  return;
-                }
+              onSaved={() => {
                 setEdit(null);
-                retry();
+                if (!isDemo) retry();
               }}
               onCancel={() => setEdit(null)}
             />
@@ -928,6 +912,7 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
                       review={row}
                       existingReplies={(data.replies ?? []).filter((r) => r.review_id === row.id)}
                       businessId={data.business!.id}
+                      isDemo={isDemo}
                       onChanged={retry}
                     />
                   ) : null}
@@ -936,7 +921,7 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
             />
           ))}
 
-          {!data.rows.length && !(demoAdded[mode]?.length) && !['summary', 'data'].includes(mode) ? (
+          {!data.rows.length && !['summary', 'data'].includes(mode) ? (
             <AppText variant="bodySmall" color="inkSoft">Sin registros todavía en esta sección.</AppText>
           ) : null}
         </>
@@ -976,13 +961,11 @@ function CampaignStatsCard({
 
   return (
     <View style={{ width: '100%', gap: 4, marginTop: 4 }}>
-      <View style={styles.chipRow}>
-        <Badge label={`Estado: ${lifecycle.status}`} tone={lifecycle.status === 'ACTIVE' ? 'green' : 'cream'} />
-        <Badge label={`Saldo restante: Bs ${lifecycle.remainingBudget}`} tone="cream" />
-        <Badge label={`Diario est.: Bs ${dailyBudget}/día`} tone="cream" />
-      </View>
+      <AppText variant="caption" color="inkSoft">
+        Estado: {lifecycle.status} · Saldo: Bs {lifecycle.remainingBudget} · Diario est.: Bs {dailyBudget}/día
+      </AppText>
       <AppText variant="micro" color="inkSoft">
-        Impresiones: {impressions} · Clics/Aperturas: {clicks} · Conversiones: {conversions} · Pico horario: {traffic.peakHourLabel}
+        Impresiones: {impressions} · Clics: {clicks} · Conversiones: {conversions} · Hora pico: {traffic.peakHourLabel}
       </AppText>
       {traffic.buckets.slice(0, 5).map((b) => (
         <AppText key={b.hourLabel} variant="micro" color="primary">
@@ -997,9 +980,6 @@ function CampaignStatsCard({
           onPress={() => onAutoPause(lifecycle.status === 'FINISHED' ? 'finished' : 'exhausted')}
         />
       ) : null}
-      <AppText variant="micro" color="inkMuted">
-        Nota: la contratación y cobro real de pauta requiere configurar pasarela de pagos en servidor; los anuncios se ocultan automáticamente a turistas VIP.
-      </AppText>
     </View>
   );
 }
@@ -1008,14 +988,19 @@ function ReviewReply({
   review,
   existingReplies,
   businessId,
+  isDemo,
   onChanged,
 }: {
   review: CatalogRow;
   existingReplies: CatalogRow[];
   businessId: string;
+  isDemo?: boolean;
   onChanged: () => void;
 }) {
   const showToast = useUiStore((s) => s.showToast);
+  const addDemoReply = useDemoStore((s) => s.addReviewReply);
+  const updateDemoReply = useDemoStore((s) => s.updateReviewReply);
+  const deleteDemoReply = useDemoStore((s) => s.deleteReviewReply);
   const [body, setBody] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -1024,6 +1009,18 @@ function ReviewReply({
 
   async function send() {
     if (lock.current || !body.trim()) return;
+    if (isDemo) {
+      addDemoReply({
+        id: `demo-rep-${Date.now()}`,
+        review_id: review.id,
+        business_id: businessId,
+        body: body.trim(),
+        created_at: new Date().toISOString(),
+      });
+      setBody('');
+      showToast('Respuesta publicada.', 'success');
+      return;
+    }
     lock.current = true;
     setBusy(true);
     try {
@@ -1041,6 +1038,12 @@ function ReviewReply({
 
   async function saveEdit(id: string) {
     if (lock.current || !editText.trim()) return;
+    if (isDemo && id.startsWith('demo-rep-')) {
+      updateDemoReply(id, editText.trim());
+      setEditingId(null);
+      showToast('Respuesta actualizada.', 'success');
+      return;
+    }
     lock.current = true;
     setBusy(true);
     try {
@@ -1058,6 +1061,11 @@ function ReviewReply({
 
   async function removeReply(id: string) {
     if (lock.current) return;
+    if (isDemo && id.startsWith('demo-rep-')) {
+      deleteDemoReply(id);
+      showToast('Respuesta eliminada.', 'success');
+      return;
+    }
     lock.current = true;
     setBusy(true);
     try {
@@ -1095,10 +1103,7 @@ function ReviewReply({
           )}
         </View>
       ))}
-      <FormField label="Respuesta del negocio" value={body} onChangeText={setBody} editable={!busy} />
-      <AppText variant="micro" color="inkMuted">
-        Nota: la API actual (/review-replies) guarda texto; el endpoint para adjuntar imágenes en respuestas de comercio no está desplegado en Render.
-      </AppText>
+      <FormField label="Respuesta del comercio" value={body} onChangeText={setBody} editable={!busy} />
       <Button title="Publicar respuesta" size="sm" disabled={busy || !body.trim()} onPress={send} />
     </View>
   );

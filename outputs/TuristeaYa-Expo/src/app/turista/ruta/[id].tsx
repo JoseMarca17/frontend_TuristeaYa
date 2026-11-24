@@ -30,6 +30,7 @@ import {
 import { createRecord, deleteRecord, updateRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { calculateDiscountedCost, useCouponStore } from '@/stores/use-coupon-store';
+import { createDemoId, useDemoStore } from '@/stores/use-demo-store';
 import { useOfflineStore } from '@/stores/use-offline-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
@@ -51,17 +52,33 @@ export default function RutaDetailScreen() {
   const showToast = useUiStore((s) => s.showToast);
 
   const isVip = hasActiveVip || demoRole === 'vip';
+  const isDemo = !session && Boolean(demoRole);
+  const demoRoutes = useDemoStore((s) => s.routes);
+  const demoSavedIds = useDemoStore((s) => s.savedRouteIds);
+  const updateDemoRoute = useDemoStore((s) => s.updateRoute);
+  const deleteDemoRoute = useDemoStore((s) => s.deleteRoute);
+  const toggleDemoSaved = useDemoStore((s) => s.toggleSavedRoute);
+  const demoPlaces = useDemoStore((s) => s.places);
+  const demoRouteMatch = isDemo ? demoRoutes.find((r) => r.id === id) : undefined;
   const localRoute = findRoute(id);
 
   const load = useCallback(
     async (signal: AbortSignal) => {
+      if (demoRouteMatch) {
+        const remotePlaces = await listRecords('places', { signal }).catch(() => []);
+        return {
+          route: demoRouteMatch as DisplayRoute,
+          savedRow: null as CatalogRow | null,
+          catalogPlaces: [...demoPlaces, ...remotePlaces].filter((row) => row.published !== false),
+        };
+      }
       if (localRoute) return { route: localRoute as DisplayRoute, savedRow: null as CatalogRow | null, catalogPlaces: [] as CatalogRow[] };
       const [remote, savedRows, catalogPlaces] = await Promise.all([
         loadBackendRoute(id, signal, session?.user.id),
         session
           ? listRecords('saved-routes', { signal, private: true, filters: { user_id: session.user.id, route_id: id } }).catch(() => [])
           : Promise.resolve([]),
-        session
+        session || isDemo
           ? listRecords('places', { signal }).catch(() => [])
           : Promise.resolve([]),
       ]);
@@ -69,10 +86,10 @@ export default function RutaDetailScreen() {
       return {
         route: remote as DisplayRoute | null,
         savedRow,
-        catalogPlaces: catalogPlaces.filter((row) => row.published !== false),
+        catalogPlaces: [...(isDemo ? demoPlaces : []), ...catalogPlaces].filter((row) => row.published !== false),
       };
     },
-    [id, localRoute, session],
+    [id, localRoute, demoRouteMatch, session, isDemo, demoPlaces],
   );
 
   const { data, loading, error, retry } = useRemoteData(load);
@@ -184,16 +201,27 @@ export default function RutaDetailScreen() {
       showToast('Completa nombre, presupuesto y minutos válidos.', 'error');
       return;
     }
+    if (isDemo && demoRouteMatch) {
+      updateDemoRoute(demoRouteMatch.id, {
+        name: editName.trim(),
+        cost: b,
+        durationMin: Math.round(m),
+        visibility: editVisibility,
+      });
+      setEditModalOpen(false);
+      showToast('Ruta actualizada.', 'success');
+      return;
+    }
     setMutBusy(true);
     try {
       await updateRecord(
         'routes',
         backendRoute.id,
         { name: editName.trim(), budget: b, available_minutes: Math.round(m), visibility: editVisibility },
-        'Actualizando ruta en Render…',
+        'Actualizando ruta…',
       );
       setEditModalOpen(false);
-      showToast('Ruta actualizada en Render.', 'success');
+      showToast('Ruta actualizada.', 'success');
       retry();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'No se pudo actualizar.', 'error');
@@ -206,14 +234,20 @@ export default function RutaDetailScreen() {
     if (!backendRoute || mutBusy) return;
     const ok = await confirmAction({
       title: 'Eliminar ruta',
-      message: `¿Eliminar permanentemente "${backendRoute.name}" de Render?`,
+      message: `¿Eliminar permanentemente "${backendRoute.name}"?`,
       confirmLabel: 'Eliminar',
       destructive: true,
     });
     if (!ok) return;
+    if (isDemo && demoRouteMatch) {
+      deleteDemoRoute(demoRouteMatch.id);
+      showToast('Ruta eliminada.', 'success');
+      router.replace('/turista/rutas-disponibles');
+      return;
+    }
     setMutBusy(true);
     try {
-      await deleteRecord('routes', backendRoute.id, 'Eliminando ruta de Render…');
+      await deleteRecord('routes', backendRoute.id, 'Eliminando ruta…');
       showToast('Ruta eliminada.', 'success');
       router.replace('/turista/rutas-disponibles');
     } catch (err) {
@@ -234,6 +268,31 @@ export default function RutaDetailScreen() {
         confirmLabel: 'Agregar parada',
       });
       if (!proceed) return;
+    }
+    if (isDemo && demoRouteMatch) {
+      const nextPos = demoRouteMatch.places.length + 1;
+      const newStop: BackendRoutePlace = {
+        id: placeRow.id,
+        stopId: createDemoId('demo-stop'),
+        position: nextPos,
+        name: String(placeRow.name || 'Parada'),
+        description: String(placeRow.description || ''),
+        address: String(placeRow.address || ''),
+        point: placeRow.latitude != null && placeRow.longitude != null
+          ? { latitude: Number(placeRow.latitude), longitude: Number(placeRow.longitude) }
+          : demoRouteMatch.origin,
+        estimatedCost: addCostVal,
+        visitMinutes: addMins,
+        categories: ['cultura'],
+      };
+      const nextPlaces = [...demoRouteMatch.places, newStop];
+      updateDemoRoute(demoRouteMatch.id, {
+        places: nextPlaces,
+        placeIds: nextPlaces.map((p) => p.id),
+      });
+      setAddStopOpen(false);
+      showToast('Parada agregada y totales recalculados.', 'success');
+      return;
     }
     setMutBusy(true);
     try {
@@ -261,6 +320,18 @@ export default function RutaDetailScreen() {
 
   async function moveStop(index: number, delta: number) {
     if (!backendRoute || mutBusy) return;
+    if (isDemo && demoRouteMatch) {
+      const next = [...demoRouteMatch.places];
+      const targetIdx = index + delta;
+      if (targetIdx < 0 || targetIdx >= next.length) return;
+      [next[index], next[targetIdx]] = [next[targetIdx], next[index]];
+      updateDemoRoute(demoRouteMatch.id, {
+        places: next.map((p, idx) => ({ ...p, position: idx + 1 })),
+        placeIds: next.map((p) => p.id),
+      });
+      showToast('Orden actualizado.', 'success');
+      return;
+    }
     const current = backendRoute.places[index];
     const target = backendRoute.places[index + delta];
     if (!current?.stopId || !target?.stopId) return;
@@ -294,6 +365,19 @@ export default function RutaDetailScreen() {
         stopId: p.stopId,
       })),
     );
+    if (isDemo && demoRouteMatch) {
+      const byStopId = new Map(demoRouteMatch.places.map((p) => [p.stopId || p.id, p]));
+      const nextPlaces: BackendRoutePlace[] = optimized.flatMap((item, idx) => {
+        const base = byStopId.get(item.stopId || item.id);
+        return base ? [{ ...base, position: idx + 1 }] : [];
+      });
+      updateDemoRoute(demoRouteMatch.id, {
+        places: nextPlaces,
+        placeIds: nextPlaces.map((p) => p.id),
+      });
+      showToast('Orden optimizado por distancia mínima.', 'success');
+      return;
+    }
     setMutBusy(true);
     try {
       await Promise.all(
@@ -314,6 +398,17 @@ export default function RutaDetailScreen() {
 
   async function removeStop(stopId: string) {
     if (mutBusy) return;
+    if (isDemo && demoRouteMatch) {
+      const nextPlaces = demoRouteMatch.places
+        .filter((p) => (p.stopId || p.id) !== stopId)
+        .map((p, idx) => ({ ...p, position: idx + 1 }));
+      updateDemoRoute(demoRouteMatch.id, {
+        places: nextPlaces,
+        placeIds: nextPlaces.map((p) => p.id),
+      });
+      showToast('Parada quitada y métricas recalculadas.', 'success');
+      return;
+    }
     setMutBusy(true);
     try {
       await deleteRecord('route-stops', stopId, 'Quitando parada…');
@@ -327,6 +422,11 @@ export default function RutaDetailScreen() {
   }
 
   async function toggleSavedAccount() {
+    if (isDemo && backendRoute) {
+      const savedNow = toggleDemoSaved(backendRoute.id);
+      showToast(savedNow ? 'Ruta guardada en tus favoritas.' : 'Ruta quitada de favoritas.', 'info');
+      return;
+    }
     if (!session) { router.navigate('/login'); return; }
     if (!backendRoute || mutBusy) return;
     setMutBusy(true);
@@ -429,13 +529,11 @@ export default function RutaDetailScreen() {
       ) : null}
 
       <View style={styles.metaRow}>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-          <Badge label={displayed.categories.map((category) => categoryLabels[category]).join(' + ') || 'Recorrido'} tone="green" />
-          {backendRoute?.shareSlug ? <Badge label={`Slug: ${backendRoute.shareSlug.slice(0, 10)}`} tone="cream" /> : null}
-          <Badge label={`Snapshot ${currentHash}`} tone="cream" />
-        </View>
-        <AppText variant="caption">
-          Salida: {displayed.departure} · Presupuesto tope Bs {displayed.cost} · Recálculo paradas: Bs {liveCalc.rawCost} · {liveCalc.totalDistanceKm} km ({liveCalc.totalTravelMinutes} min traslado + {liveCalc.totalVisitMinutes} min visita)
+        <AppText variant="caption" color="inkSoft">
+          {displayed.categories.map((category) => categoryLabels[category]).join(' · ') || 'Recorrido'} · Salida: {displayed.departure}
+        </AppText>
+        <AppText variant="caption" color="inkSoft">
+          Presupuesto Bs {displayed.cost} · Recálculo paradas: Bs {liveCalc.rawCost} · {liveCalc.totalDistanceKm} km ({liveCalc.totalTravelMinutes} min traslado + {liveCalc.totalVisitMinutes} min visita)
         </AppText>
       </View>
 
@@ -446,10 +544,10 @@ export default function RutaDetailScreen() {
         title="Mapa del recorrido con polilínea"
       />
 
-      {/* Acciones de dueño en Render */}
+      {/* Acciones de dueño */}
       {backendRoute?.isMine ? (
         <View style={styles.ownerPanel}>
-          <AppText variant="section">Gestionar mi ruta en Render</AppText>
+          <AppText variant="section">Gestionar ruta</AppText>
           <View style={styles.btnGrid}>
             <View style={{ flex: 1 }}>
               <Button title="Editar ruta" size="sm" onPress={openEditModal} disabled={mutBusy} />
@@ -502,13 +600,17 @@ export default function RutaDetailScreen() {
       ) : backendRoute ? (
         <View style={{ gap: spacing.sm }}>
           <Button
-            title={savedRow ? '✓ Guardada en mi cuenta (toca para quitar)' : 'Guardar en mi cuenta (Render)'}
+            title={
+              savedRow || demoSavedIds.includes(backendRoute.id)
+                ? '✓ Guardada en favoritas (quitar)'
+                : 'Guardar ruta'
+            }
             disabled={mutBusy}
-            variant={savedRow ? 'secondary' : 'primary'}
+            variant={savedRow || demoSavedIds.includes(backendRoute.id) ? 'secondary' : 'primary'}
             onPress={() => { void toggleSavedAccount(); }}
           />
           <Button
-            title={isVip ? 'Descargar offline (SQLite + VIP)' : 'Descarga offline (Requiere VIP vigente)'}
+            title={isVip ? 'Descargar para usar sin conexión' : 'Descarga sin conexión (VIP)'}
             variant="soft"
             disabled={mutBusy}
             onPress={() => { void downloadOffline(); }}

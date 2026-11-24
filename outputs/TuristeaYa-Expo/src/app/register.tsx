@@ -86,10 +86,10 @@ export default function RegisterScreen() {
         {message ? <AppText accessibilityRole="alert" style={styles.alert}>{message}</AppText> : null}
         {pendingEmailNotice ? (
           <View style={styles.confirmBox} accessibilityRole="region" accessibilityLabel="Confirmación de correo">
-            <AppText variant="label" color="primary">Confirmación de correo pendiente</AppText>
+            <AppText variant="label" color="primary">Revisa tu correo</AppText>
             <AppText variant="bodySmall">{pendingEmailNotice}</AppText>
             <AppText variant="caption" color="inkSoft">
-              Nota: una vez confirmes el enlace recibido en {email.trim()}, inicia sesión aquí. (Render no expone reenvío automático por API).
+              Cuando confirmes tu correo podrás entrar desde Iniciar sesión.
             </AppText>
             <Button title="Ir a iniciar sesión" size="sm" variant="secondary" onPress={() => router.replace('/login')} />
           </View>

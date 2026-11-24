@@ -16,6 +16,7 @@ import { MAX_REVIEW_PHOTOS } from '@/services/domain-rules';
 import { validateAndCompressImage, type PreparedImageAsset } from '@/services/image-upload';
 import { createRecord, updateRecord } from '@/services/management';
 import { uploadPlaceMedia } from '@/services/media';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { borderWidth, colors, radius, spacing } from '@/theme';
 
@@ -37,6 +38,7 @@ export function BusinessWizard({
   onSaved: () => void;
 }) {
   const showToast = useUiStore((s) => s.showToast);
+  const upsertDemoEntity = useDemoStore((s) => s.upsertEntityRow);
 
   const [step, setStep] = useState(0);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -147,7 +149,38 @@ export function BusinessWizard({
       return;
     }
     if (isDemo) {
-      showToast('Wizard de 3 pasos guardado y verificación simulada en Vista Demo.', 'info');
+      const placeId = existingPlace?.id || `demo-place-${Date.now()}`;
+      upsertDemoEntity('businesses', {
+        id: business.id,
+        owner_id: business.owner_id,
+        name: bizName.trim(),
+        phone: phone.trim() || null,
+        contact_email: email.trim() || null,
+      });
+      upsertDemoEntity('places', {
+        id: placeId,
+        business_id: business.id,
+        zone_id: zoneId,
+        name: placeName.trim(),
+        description: `${description.trim()}\nMenú destacado: ${menuSummary.trim()}`,
+        address: address.trim(),
+        latitude,
+        longitude,
+        estimated_cost: Math.max(0, Number(estimatedCost) || 0),
+        visit_minutes: Math.max(15, Number(visitMinutes) || 45),
+        services,
+        published: existingPlace?.published ?? true,
+      });
+      upsertDemoEntity('verifications', {
+        id: verifications[0]?.id || `demo-ver-${Date.now()}`,
+        business_id: business.id,
+        responsible_name: responsibleName.trim(),
+        contact_email: email.trim() || business.contact_email || null,
+        document_path: `${legalDocRef.trim()} | Menu: ${menuDocRef.trim()}`,
+        status: 'pending',
+        review_notes: 'Solicitud enviada para revisión.',
+      });
+      showToast('Comercio guardado y verificación enviada.', 'success');
       onSaved();
       return;
     }
@@ -325,7 +358,7 @@ export function BusinessWizard({
           ) : null}
 
           <FormField
-            label="Menú en PDF o catálogo URL (Render Storage admite imágenes en /media/places)"
+            label="Menú en PDF o catálogo URL"
             value={menuDocRef}
             onChangeText={setMenuDocRef}
           />

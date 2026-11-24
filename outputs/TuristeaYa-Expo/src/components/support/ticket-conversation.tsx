@@ -9,15 +9,21 @@ import { Chip } from '@/components/ui/chip';
 import { FormField } from '@/components/ui/form-field';
 import { ListCard } from '@/components/ui/list-card';
 import { useRemoteData } from '@/hooks/use-remote-data';
-import { listRecords, type CatalogRow } from '@/services/catalog';
+import { listRecords } from '@/services/catalog';
 import { validateAndCompressImage, type PreparedImageAsset } from '@/services/image-upload';
 import { createRecord, deleteRecord, updateRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { radius, spacing } from '@/theme';
 
 export function TicketConversation({ ticketId, isDemo = false }: { ticketId: string; isDemo?: boolean }) {
   const session = useAuthStore((s) => s.session);
+  const demoRole = useAuthStore((s) => s.demoRole);
+  const demoMessages = useDemoStore((s) => s.ticketMessages);
+  const addDemoMsg = useDemoStore((s) => s.addTicketMessage);
+  const updateDemoMsg = useDemoStore((s) => s.updateTicketMessage);
+  const deleteDemoMsg = useDemoStore((s) => s.deleteTicketMessage);
   const showToast = useUiStore((s) => s.showToast);
 
   const [body, setBody] = useState('');
@@ -25,16 +31,13 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
   const [editBody, setEditBody] = useState('');
   const [attachment, setAttachment] = useState<PreparedImageAsset | null>(null);
   const [livePolling, setLivePolling] = useState(true);
-  const [demoMessages, setDemoMessages] = useState<CatalogRow[]>([
-    { id: 'demo-msg-1', sender_id: 'demo-tourist', body: 'El local no reconoce mi cupón.', created_at: new Date().toISOString() },
-  ]);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
 
   const load = useCallback(
     (signal: AbortSignal) => {
-      if (isDemo) return Promise.resolve(demoMessages);
+      if (isDemo) return Promise.resolve(demoMessages.filter((m) => m.ticket_id === ticketId));
       return session
         ? listRecords('ticket-messages', { private: true, signal, filters: { ticket_id: ticketId } })
         : Promise.resolve([]);
@@ -62,7 +65,7 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
     try {
       const prepared = await validateAndCompressImage(res.assets[0], 0, 1);
       setAttachment(prepared);
-      showToast('Adjunto preparado (referencia en mensaje; Render no tiene /media/tickets).', 'info');
+      showToast('Adjunto preparado.', 'info');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Archivo inválido (Máx. 5 MB).', 'error');
     }
@@ -71,17 +74,20 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
   async function send() {
     if (lock.current || (!body.trim() && !attachment)) return;
     const finalBody = attachment
-      ? `${body.trim() || 'Evidencia adjunta'} [Adjunto: ${attachment.fileName || 'captura.jpg'} · ${attachment.compressedLabel || '≤5MB'}]`
+      ? `${body.trim() || 'Evidencia adjunta'} [Adjunto: ${attachment.fileName || 'captura.jpg'}]`
       : body.trim();
 
     if (isDemo) {
-      setDemoMessages((prev) => [
-        ...prev,
-        { id: `demo-msg-${Date.now()}`, sender_id: 'demo-support', body: finalBody, created_at: new Date().toISOString() },
-      ]);
+      addDemoMsg({
+        id: `demo-tmsg-${Date.now()}`,
+        ticket_id: ticketId,
+        sender_id: `demo-${demoRole || 'support'}`,
+        body: finalBody,
+        created_at: new Date().toISOString(),
+      });
       setBody('');
       setAttachment(null);
-      showToast('Mensaje enviado (Vista Demo).', 'info');
+      showToast('Mensaje enviado.', 'info');
       return;
     }
     if (!session) return;
@@ -108,7 +114,7 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
   async function saveEdit(msgId: string) {
     if (lock.current || !editBody.trim()) return;
     if (isDemo) {
-      setDemoMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, body: editBody.trim() } : m)));
+      updateDemoMsg(msgId, editBody.trim());
       setEditingId(null);
       return;
     }
@@ -130,7 +136,7 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
   async function removeMsg(msgId: string) {
     if (lock.current) return;
     if (isDemo) {
-      setDemoMessages((prev) => prev.filter((m) => m.id !== msgId));
+      deleteDemoMsg(msgId);
       return;
     }
     lock.current = true;
@@ -147,27 +153,29 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
     }
   }
 
+  const messages = isDemo ? demoMessages.filter((m) => m.ticket_id === ticketId) : data ?? [];
+
   return (
     <View style={{ gap: spacing.xs + 2 }}>
       <View style={styles.topRow}>
         <Chip
-          label={livePolling ? '● Sincronización activa (5s)' : 'Pausado'}
+          label={livePolling ? 'Actualización en vivo' : 'Manual'}
           selected={livePolling}
           onPress={() => setLivePolling((v) => !v)}
         />
-        <Badge label={loading ? 'Actualizando…' : `${data?.length ?? 0} mensajes`} tone="cream" />
+        <Badge label={`${messages.length} mensajes`} tone="cream" />
       </View>
 
       {error || notice ? <AppText accessibilityRole="alert" style={{ color: '#b91c1c' }}>{error || notice}</AppText> : null}
-      {data
-        ?.slice()
+      {messages
+        .slice()
         .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
         .map((row) => {
-          const isMine = session ? row.sender_id === session.user.id : row.sender_id === 'demo-support';
+          const isMine = session ? row.sender_id === session.user.id : row.sender_id === `demo-${demoRole || 'support'}`;
           return (
             <ListCard
               key={row.id}
-              title={`${isMine ? 'Tú' : 'Usuario'} · ${new Date(String(row.created_at)).toLocaleString()}`}
+              title={`${isMine ? 'Tú' : 'Participante'} · ${new Date(String(row.created_at)).toLocaleString()}`}
               body={String(row.body)}
               footer={
                 isMine ? (
@@ -205,7 +213,7 @@ export function TicketConversation({ ticketId, isDemo = false }: { ticketId: str
         </View>
         <Button title="Adjuntar foto" variant="secondary" size="sm" disabled={busy} onPress={() => { void pickAttachment(); }} />
       </View>
-      <Button title="Actualizar conversación" variant="soft" size="sm" disabled={loading} onPress={retry} />
+      {!isDemo ? <Button title="Actualizar conversación" variant="soft" size="sm" disabled={loading} onPress={retry} /> : null}
     </View>
   );
 }

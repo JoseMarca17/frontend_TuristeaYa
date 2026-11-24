@@ -29,6 +29,7 @@ import {
 } from '@/services/domain-rules';
 import { createRecord } from '@/services/management';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useRouteFilterStore } from '@/stores/use-route-filter-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
@@ -46,6 +47,8 @@ export default function CrearRutaScreen() {
   const session = useAuthStore((s) => s.session);
   const hasActiveVip = useAuthStore((s) => s.hasActiveVip);
   const demoRole = useAuthStore((s) => s.demoRole);
+  const isDemo = !session && Boolean(demoRole);
+  const createDemoRoute = useDemoStore((s) => s.createRoute);
   const applyFilters = useRouteFilterStore((s) => s.applyFilters);
   const showToast = useUiStore((s) => s.showToast);
 
@@ -182,12 +185,49 @@ export default function CrearRutaScreen() {
   }
 
   async function saveAlternativeToRender(alt: GeneratedRouteAlternative<PlannerPlaceInput>) {
+    const parsed = validateNumbers();
+    if (!parsed || busy) return;
+    if (isDemo) {
+      const demoId = `demo-route-${Date.now()}`;
+      const routeName = name.trim() || `${alt.title} (${location.label})`;
+      createDemoRoute({
+        id: demoId,
+        userId: `demo-${demoRole}`,
+        isMine: true,
+        visibility,
+        shareSlug: randomUUID(),
+        preference: alt.preference,
+        createdAt: new Date().toISOString(),
+        name: routeName,
+        placeIds: alt.metrics.stops.map((s) => s.place.id),
+        categories: ['cultura'],
+        cost: alt.metrics.finalCost,
+        durationMin: alt.metrics.totalDurationMinutes,
+        distanceKm: alt.metrics.totalDistanceKm,
+        visited: false,
+        departure: location.label,
+        origin: parsed.origin,
+        places: alt.metrics.stops.map((s) => ({
+          id: s.place.id,
+          stopId: `demo-stop-${s.place.id}-${s.position}`,
+          position: s.position,
+          name: s.place.name,
+          description: '',
+          address: location.label,
+          point: { latitude: s.place.latitude, longitude: s.place.longitude },
+          estimatedCost: s.estimatedCost,
+          visitMinutes: s.visitMinutes,
+          categories: [(s.place.category as 'cultura' | 'gastronomia' | 'naturaleza') || 'cultura'],
+        })),
+      });
+      showToast('Ruta guardada en tu vista demo.', 'success');
+      router.replace(`/turista/ruta/${demoId}`);
+      return;
+    }
     if (!session) {
       router.navigate('/login');
       return;
     }
-    const parsed = validateNumbers();
-    if (!parsed || busy) return;
     setBusy(true);
     setError('');
     try {
@@ -206,7 +246,7 @@ export default function CrearRutaScreen() {
           visibility,
           share_slug: shareSlug,
         },
-        'Guardando ruta generada y paradas…',
+        'Guardando ruta y paradas…',
       );
       if (created?.id) {
         for (const stop of alt.metrics.stops) {
@@ -225,7 +265,7 @@ export default function CrearRutaScreen() {
             `Guardando parada ${stop.position} de ${alt.metrics.stops.length}…`,
           );
         }
-        showToast('Ruta optimizada y paradas guardadas en Render.', 'success');
+        showToast('Ruta optimizada y paradas guardadas.', 'success');
         router.replace(`/turista/ruta/${created.id}`);
       } else {
         router.replace('/turista/rutas-disponibles');
@@ -262,16 +302,38 @@ export default function CrearRutaScreen() {
   }
 
   async function createEmptyInRender() {
-    if (!session) {
-      router.navigate('/login');
-      return;
-    }
     if (!name.trim()) {
-      setError('Escribe un nombre para guardar la nueva ruta en Render.');
+      setError('Escribe un nombre para crear la ruta.');
       return;
     }
     const parsed = validateNumbers();
     if (!parsed) return;
+    if (isDemo) {
+      const demoId = `demo-route-${Date.now()}`;
+      createDemoRoute({
+        id: demoId,
+        userId: `demo-${demoRole}`,
+        isMine: true,
+        visibility,
+        name: name.trim(),
+        placeIds: [],
+        categories: categories.length ? categories : ['cultura'],
+        cost: parsed.maxBudget,
+        durationMin: Math.round(parsed.maxMinutes),
+        distanceKm: 0,
+        visited: false,
+        departure: location.label,
+        origin: parsed.origin,
+        places: [],
+      });
+      showToast('Ruta creada. Ahora puedes agregar paradas.', 'success');
+      router.replace(`/turista/ruta/${demoId}`);
+      return;
+    }
+    if (!session) {
+      router.navigate('/login');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -288,9 +350,9 @@ export default function CrearRutaScreen() {
           visibility,
           share_slug: randomUUID(),
         },
-        'Creando ruta en Render…',
+        'Creando ruta…',
       );
-      showToast('Ruta creada en Render. Ahora puedes agregar paradas.', 'success');
+      showToast('Ruta creada. Ahora puedes agregar paradas.', 'success');
       if (created?.id) router.replace(`/turista/ruta/${created.id}`);
       else router.replace('/turista/rutas-disponibles');
     } catch (err) {
@@ -364,7 +426,7 @@ export default function CrearRutaScreen() {
           onPress={handleGenerateAlternatives}
         />
         <Button
-          title={session ? (busy ? 'Creando…' : 'Crear ruta vacía manual en Render') : 'Inicia sesión para guardar en Render'}
+          title={session || isDemo ? (busy ? 'Creando…' : 'Crear ruta vacía manual') : 'Inicia sesión para guardar'}
           variant="secondary"
           disabled={busy}
           onPress={() => { void createEmptyInRender(); }}
@@ -376,7 +438,7 @@ export default function CrearRutaScreen() {
         <View style={styles.card}>
           <AppText variant="section">Alternativas generadas ({alternatives.length})</AppText>
           <AppText variant="caption" color="inkSoft">
-            Ordenadas automáticamente (nearest-neighbor) garantizando presupuesto ≤ Bs {budget} y duración ≤ {minutes} min.
+            Recorridos ordenados dentro de tu presupuesto (≤ Bs {budget}) y tiempo (≤ {minutes} min).
           </AppText>
           <View style={styles.rowWrap}>
             {alternatives.map((alt) => (
@@ -404,17 +466,17 @@ export default function CrearRutaScreen() {
               />
               <ListCard
                 title={activeAlt.title}
-                body={`Costo total: Bs ${activeAlt.metrics.finalCost} · Tiempo total: ${activeAlt.metrics.totalDurationMinutes} min (${activeAlt.metrics.totalTravelMinutes} min traslado + ${activeAlt.metrics.totalVisitMinutes} min visita) · Distancia: ${activeAlt.metrics.totalDistanceKm} km`}
+                body={`Costo total: Bs ${activeAlt.metrics.finalCost} · Tiempo total: ${activeAlt.metrics.totalDurationMinutes} min · Distancia: ${activeAlt.metrics.totalDistanceKm} km`}
               />
               {activeAlt.metrics.stops.map((stop) => (
                 <ListCard
                   key={stop.place.id}
                   title={`${stop.position}. ${stop.place.name}`}
-                  body={`Traslado: ${stop.distanceFromPrevKm} km (${stop.travelMinutes} min) · Visita: ${stop.visitMinutes} min · Est.: Bs ${stop.estimatedCost}`}
+                  body={`Traslado ${stop.travelMinutes} min · Visita ${stop.visitMinutes} min · Est. Bs ${stop.estimatedCost}`}
                 />
               ))}
               <Button
-                title={session ? (busy ? 'Guardando paradas…' : 'Guardar esta alternativa en Render') : 'Inicia sesión para guardar'}
+                title={session || isDemo ? (busy ? 'Guardando…' : 'Guardar esta ruta') : 'Inicia sesión para guardar'}
                 disabled={busy}
                 onPress={() => { void saveAlternativeToRender(activeAlt); }}
               />

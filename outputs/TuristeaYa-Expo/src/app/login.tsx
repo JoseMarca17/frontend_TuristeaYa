@@ -1,45 +1,39 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { router } from 'expo-router';
 
-import { router, type Href } from 'expo-router';
-
+import { DemoAccessModal } from '@/components/auth/demo-access-modal';
 import { Screen } from '@/components/layout/screen';
 import { AppText } from '@/components/ui/app-text';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
-import { DEMO_ACCOUNTS, type DemoAccount } from '@/services/demo-accounts';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { useUiStore } from '@/stores/use-ui-store';
-import { colors, radius, spacing } from '@/theme';
+import { borderWidth, colors, radius, spacing } from '@/theme';
 
-/** Pantalla 02: inicio de sesión real en Render + selector de usuarios demo por rol. */
+/** Pantalla de inicio de sesión limpia, sin tarjetas técnicas de prueba. */
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const [fallbackAccount, setFallbackAccount] = useState<DemoAccount | null>(null);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [recoveryNotice, setRecoveryNotice] = useState('');
+  const [demoOpen, setDemoOpen] = useState(false);
 
   const loginReal = useAuthStore((s) => s.loginReal);
-  const loginDemoOnRender = useAuthStore((s) => s.loginDemoOnRender);
-  const enterDemoPreview = useAuthStore((s) => s.enterDemoPreview);
   const showToast = useUiStore((s) => s.showToast);
 
   function requestPasswordRecovery() {
     const target = (recoveryEmail || email).trim();
     if (!target || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) {
-      setRecoveryNotice('Ingresa un correo electrónico válido para solicitar la recuperación.');
+      setRecoveryNotice('Ingresa un correo electrónico válido.');
       return;
     }
     setRecoveryNotice(
-      `Correo verificado (${target}). Bloqueo del servidor: la API actual de Render (/api/v1/auth) aún no expone un endpoint /forgot-password ni /reset-password para enviar enlaces automáticos.`,
+      `Si tu cuenta (${target}) solicita confirmación de correo o restablecimiento y no recibes el enlace, puedes explorar toda la aplicación desde Acceso demo al final de esta pantalla.`,
     );
-    showToast('La recuperación automática depende de habilitar el endpoint en el backend.', 'info');
   }
 
   async function login() {
@@ -50,11 +44,10 @@ export default function LoginScreen() {
     }
     setBusy(true);
     setMessage('');
-    setFallbackAccount(null);
     try {
       await loginReal(email, password);
       const role = useAuthStore.getState().backendRole;
-      showToast('Sesión iniciada en Render.', 'success');
+      showToast('Sesión iniciada.', 'success');
       if (role === 'admin') router.replace('/admin');
       else if (role === 'support') router.replace('/soporte');
       else if (role === 'advertiser') router.replace('/RamaNegocio');
@@ -66,35 +59,8 @@ export default function LoginScreen() {
     }
   }
 
-  async function handleDemoLogin(account: DemoAccount) {
-    if (busy) return;
-    setEmail(account.email);
-    setPassword(account.password);
-    setBusy(true);
-    setMessage('');
-    setFallbackAccount(null);
-    try {
-      const result = await loginDemoOnRender(account.key);
-      if (result.ok) {
-        showToast(result.message, 'success');
-        router.replace(account.routeTarget as Href);
-      } else {
-        setMessage(result.message);
-        if (result.canFallbackToDemoPreview) setFallbackAccount(account);
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function handleDemoPreview(account: DemoAccount) {
-    enterDemoPreview(account.key);
-    showToast(`Vista Demo activada para ${account.title}.`, 'info');
-    router.replace(account.routeTarget as Href);
-  }
-
   return (
-    <Screen title="Iniciar sesión" subtitle="Conecta con tu cuenta en Render o prueba un rol demo" extraEdges={['bottom']}>
+    <Screen title="Iniciar sesión" subtitle="Accede con tu cuenta o explora como invitado" extraEdges={['bottom']}>
       <View style={styles.formCard}>
         <FormField
           label="Correo electrónico"
@@ -116,27 +82,19 @@ export default function LoginScreen() {
             <AppText variant="bodySmall" accessibilityRole="alert" style={styles.alertText}>
               {message}
             </AppText>
-            {fallbackAccount ? (
-              <Button
-                title={`Entrar en Vista Demo (${fallbackAccount.title})`}
-                size="sm"
-                variant="secondary"
-                onPress={() => handleDemoPreview(fallbackAccount)}
-              />
-            ) : null}
           </View>
         ) : null}
         <Button title={busy ? 'Ingresando…' : 'Ingresar'} disabled={busy} onPress={login} />
         <View style={styles.secondaryRow}>
           <View style={{ flex: 1 }}>
-            <Button title="Crear una cuenta" variant="secondary" onPress={() => router.navigate('/register')} />
+            <Button title="Crear cuenta" variant="secondary" onPress={() => router.navigate('/register')} />
           </View>
           <View style={{ flex: 1 }}>
             <Button title="Modo invitado" variant="soft" onPress={() => router.navigate('/turista/rutas-disponibles')} />
           </View>
         </View>
         <Button
-          title={recoveryOpen ? 'Ocultar recuperación' : '¿Olvidaste tu contraseña?'}
+          title={recoveryOpen ? 'Ocultar ayuda de acceso' : '¿Olvidaste tu contraseña?'}
           variant="soft"
           size="sm"
           onPress={() => {
@@ -145,8 +103,7 @@ export default function LoginScreen() {
           }}
         />
         {recoveryOpen ? (
-          <View style={styles.alertBox} accessibilityRole="region" accessibilityLabel="Recuperación de contraseña">
-            <AppText variant="label">Recuperación de contraseña</AppText>
+          <View style={styles.alertBox} accessibilityRole="region" accessibilityLabel="Ayuda de recuperación">
             <FormField
               label="Correo de tu cuenta"
               placeholder="usuario@ejemplo.com"
@@ -155,7 +112,7 @@ export default function LoginScreen() {
               value={recoveryEmail}
               onChangeText={setRecoveryEmail}
             />
-            <Button title="Verificar estado de recuperación" size="sm" variant="secondary" onPress={requestPasswordRecovery} />
+            <Button title="Consultar ayuda" size="sm" variant="secondary" onPress={requestPasswordRecovery} />
             {recoveryNotice ? (
               <AppText variant="caption" style={styles.alertText} accessibilityRole="alert">
                 {recoveryNotice}
@@ -165,65 +122,24 @@ export default function LoginScreen() {
         ) : null}
       </View>
 
-      <View style={styles.demoHeader}>
-        <AppText variant="section">Usuarios demo por rol (ejemplos listos)</AppText>
-        <AppText variant="caption" color="inkSoft">
-          Turista y Negocio crean/conectan una sesión real automática en Render. VIP, Soporte y Admin conectan si tienen el rol asignado en Render o abren su Vista Demo.
-        </AppText>
+      <Button title="Volver al inicio" variant="secondary" onPress={() => router.navigate('/')} />
+
+      {/* Acceso discreto a Vista Demo en la parte inferior */}
+      <View style={styles.footerDemoWrap}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Abrir acceso demo"
+          hitSlop={10}
+          onPress={() => setDemoOpen(true)}
+          style={({ pressed }) => [styles.discreetDemoBtn, pressed && { opacity: 0.85 }]}
+        >
+          <AppText variant="micro" style={styles.discreetDemoText}>
+            · demo ·
+          </AppText>
+        </Pressable>
       </View>
 
-      {DEMO_ACCOUNTS.map((account) => (
-        <View key={account.key} style={styles.demoCard}>
-          <View style={styles.demoTop}>
-            <View style={{ flex: 1 }}>
-              <AppText variant="section">{account.title}</AppText>
-              <AppText variant="micro" color="inkSoft">{account.roleLabel}</AppText>
-            </View>
-            <Badge label={account.badge} tone={account.key === 'vip' ? 'cream' : 'green'} />
-          </View>
-          <AppText variant="caption">{account.summary}</AppText>
-          <View style={styles.credStrip}>
-            <Ionicons name="key-outline" size={14} color={colors.primary} />
-            <AppText variant="micro" selectable style={{ flex: 1 }}>
-              {account.email} · {account.password}
-            </AppText>
-          </View>
-          <View style={styles.demoButtons}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                setEmail(account.email);
-                setPassword(account.password);
-                setMessage(`Credenciales de ${account.title} cargadas en el formulario.`);
-                setFallbackAccount(null);
-              }}
-              style={({ pressed }) => [styles.miniBtn, pressed && styles.miniPressed]}
-            >
-              <AppText variant="caption" style={styles.miniText}>Rellenar</AppText>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              disabled={busy}
-              onPress={() => { void handleDemoLogin(account); }}
-              style={({ pressed }) => [styles.miniBtnPrimary, pressed && styles.miniPrimaryPressed]}
-            >
-              <AppText variant="caption" style={styles.miniPrimaryText}>
-                {account.canAutoRegisterOnRender ? 'Entrar en Render' : 'Probar en Render'}
-              </AppText>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              disabled={busy}
-              onPress={() => handleDemoPreview(account)}
-              style={({ pressed }) => [styles.miniBtn, pressed && styles.miniPressed]}
-            >
-              <AppText variant="caption" style={styles.miniText}>Vista Demo</AppText>
-            </Pressable>
-          </View>
-        </View>
-      ))}
-
-      <Button title="Volver a guía de roles" variant="secondary" onPress={() => router.navigate('/')} />
+      <DemoAccessModal visible={demoOpen} onClose={() => setDemoOpen(false)} />
     </Screen>
   );
 }
@@ -232,7 +148,7 @@ const styles = StyleSheet.create({
   formCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
-    borderWidth: 1,
+    borderWidth: borderWidth.hairline,
     borderColor: colors.border,
     padding: spacing.lg,
     gap: spacing.md,
@@ -244,7 +160,7 @@ const styles = StyleSheet.create({
   alertBox: {
     backgroundColor: colors.highlight,
     borderRadius: radius.md,
-    borderWidth: 1,
+    borderWidth: borderWidth.hairline,
     borderColor: colors.borderHighlight,
     padding: spacing.md,
     gap: spacing.sm,
@@ -252,64 +168,18 @@ const styles = StyleSheet.create({
   alertText: {
     color: colors.ink,
   },
-  demoHeader: {
-    gap: 2,
-    marginTop: spacing.xs,
-  },
-  demoCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.md,
-    gap: spacing.sm,
-  },
-  demoTop: {
-    flexDirection: 'row',
+  footerDemoWrap: {
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
+    paddingTop: spacing.xl,
   },
-  credStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: colors.background,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-  },
-  demoButtons: {
-    flexDirection: 'row',
-    gap: spacing.xs + 2,
-    flexWrap: 'wrap',
-  },
-  miniBtn: {
+  discreetDemoBtn: {
+    opacity: 0.42,
     paddingHorizontal: spacing.md,
-    paddingVertical: 7,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.borderGreen,
-    backgroundColor: colors.surface,
+    paddingVertical: spacing.xs + 2,
   },
-  miniPressed: {
-    backgroundColor: colors.surfaceGreen,
-  },
-  miniText: {
-    color: colors.primary,
-    fontWeight: '700',
-  },
-  miniBtnPrimary: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 7,
-    borderRadius: radius.sm,
-    backgroundColor: colors.primary,
-  },
-  miniPrimaryPressed: {
-    backgroundColor: colors.primaryDeep,
-  },
-  miniPrimaryText: {
-    color: colors.onPrimary,
-    fontWeight: '700',
+  discreetDemoText: {
+    fontSize: 11,
+    color: colors.inkMuted,
+    letterSpacing: 0.8,
   },
 });

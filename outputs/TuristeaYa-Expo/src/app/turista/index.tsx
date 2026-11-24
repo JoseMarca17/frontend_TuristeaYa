@@ -126,7 +126,7 @@ export default function InicioScreen() {
             <AppText variant="section">Explora todas las rutas</AppText>
             <AppText variant="caption" color="inkSoft">
               {loading
-                ? 'Sincronizando rutas desde Render…'
+                ? 'Cargando rutas…'
                 : `${previewRoutes?.length ?? 0} rutas disponibles listas para recorrer`}
             </AppText>
           </View>
