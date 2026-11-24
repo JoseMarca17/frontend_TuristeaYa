@@ -11,6 +11,7 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.drospi.turisteaya",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -69,11 +70,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "8602cb11-d0fe-40dc-881d-a496fd1c52bf"
-      }
-    },
-    "owner": "drospi"
+      "router": {}
+    }
   }
 }
