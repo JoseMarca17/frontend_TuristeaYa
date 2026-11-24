@@ -11,7 +11,7 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
-      "package": "com.drospi.turisteaya",
+      "package": "com.jota17m.turisteaya",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
