@@ -86,13 +86,19 @@ const server = createServer(async (req, res) => {
     assert.equal(reservations.length, 2);
     assert.equal(reservations[0].body.request_key, reservations[1].body.request_key);
     assert.equal(reservations[0].body.people, 1);
+    await page.goto(origin + '/turista/rutas-disponibles');
+    await page.getByText('Todas las rutas', { exact: true }).waitFor();
+    await page.getByLabel('Filtrar y ordenar rutas').click();
+    await page.getByText('Filtrar y ordenar rutas', { exact: true }).waitFor();
+    await page.getByLabel('Cerrar filtros').click();
     await page.goto(origin + '/turista/cupones');
     await page.getByText('Cupón de prueba', { exact: true }).click();
     await page.locator('input').fill('100');
     await page.getByRole('button', { name: 'Confirmar canje', exact: true }).click();
-    await page.getByText('Cupón canjeado. Consulta el historial en Usados.', { exact: true }).waitFor();
+    await page.waitForURL('**/turista/cupon-canjeado');
+    await page.getByText('Cupón canjeado', { exact: true }).first().waitFor();
     assert.equal(writes.find(write => write.pathname.endsWith('/redeem')).body.purchase_amount, 100);
     assert.deepEqual(errors, []);
-    console.log('PASS: login, restauración, soporte, nueve paneles, reserva con reintento idempotente y canje; API simulada, sin errores JS.');
+    console.log('PASS: login, restauración, soporte, nueve paneles, todas las rutas + icono filtro, reserva con reintento idempotente y canje con redirección y descuento en rutas; API simulada, sin errores JS.');
   } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); server.close(); process.exitCode = 1; });

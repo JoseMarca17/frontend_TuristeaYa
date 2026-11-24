@@ -1,5 +1,13 @@
-import { Stack } from "expo-router";
+import { Stack } from 'expo-router';
+import { View } from 'react-native';
+import { AppTabBar } from '@/components/layout/app-tab-bar';
+import { colors } from '@/theme';
 
 export default function NegocioLayout() {
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }} />
+      <AppTabBar />
+    </View>
+  );
 }

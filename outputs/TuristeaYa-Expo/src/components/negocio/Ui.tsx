@@ -1,20 +1,8 @@
 import React from 'react';
-import {
-  View,
-  Text,
-  Pressable,
-  ScrollView,
-  TextInput,
-  StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
-  TextInputProps,
-} from 'react-native';
+import { View, Text, Pressable, TextInput, StyleSheet, TextInputProps } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Screen } from '@/components/layout/screen';
 import { C } from '../../constants/negocioTheme';
-
-/* ---------- Navegación ---------- */
 
 export type Tab = { label: string; ruta?: string };
 
@@ -26,7 +14,7 @@ export const TABS_NEGOCIO: Tab[] = [
 ];
 
 export const TABS_USUARIO: Tab[] = [
-  { label: 'Inicio', ruta: '/' },
+  { label: 'Inicio', ruta: '/turista' },
   { label: 'Mis rutas', ruta: '/turista/mis-rutas' },
   { label: 'Cupones', ruta: '/turista/cupones' },
   { label: 'Perfil', ruta: '/turista/perfil' },
@@ -42,61 +30,22 @@ export function useIr() {
   };
 }
 
-/* ---------- Pantalla base ---------- */
-
 type PantallaProps = {
   titulo: string;
   subtitulo?: string;
-  tabs: Tab[];
-  activa: string;
+  tabs?: Tab[];
+  activa?: string;
   children: React.ReactNode;
 };
 
-export function Pantalla({ titulo, subtitulo, tabs, activa, children }: PantallaProps) {
-  const insets = useSafeAreaInsets();
-  const { ir, volver } = useIr();
-
+/** Delega al componente `Screen` unificado; la barra inferior la aporta `_layout.tsx`. */
+export function Pantalla({ titulo, subtitulo, children }: PantallaProps) {
   return (
-    <KeyboardAvoidingView
-      style={[s.pantalla, { paddingTop: insets.top }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={s.header}>
-        <Pressable onPress={volver} hitSlop={12}>
-          <Text style={s.flecha}>‹</Text>
-        </Pressable>
-        <Text style={s.titulo} numberOfLines={1}>
-          {titulo}
-        </Text>
-      </View>
-      {subtitulo ? <Text style={s.subtitulo}>{subtitulo}</Text> : null}
-
-      <ScrollView
-        contentContainerStyle={s.contenido}
-        keyboardShouldPersistTaps="handled"
-      >
-        {children}
-      </ScrollView>
-
-      <View style={[s.tabBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-        {tabs.map((t) => {
-          const activo = t.label === activa;
-          return (
-            <Pressable
-              key={t.label}
-              style={[s.tab, activo && s.tabActivo]}
-              onPress={() => t.ruta && ir(t.ruta)}
-            >
-              <Text style={s.tabTexto}>{t.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-    </KeyboardAvoidingView>
+    <Screen title={titulo} subtitle={subtitulo}>
+      {children}
+    </Screen>
   );
 }
-
-/* ---------- Piezas reutilizables ---------- */
 
 export function Card({ children }: { children: React.ReactNode }) {
   return <View style={s.card}>{children}</View>;
@@ -113,19 +62,13 @@ export function Boton({
 }) {
   const lleno = variante === 'lleno';
   return (
-    <Pressable
-      onPress={onPress}
-      style={[s.boton, lleno ? s.botonLleno : s.botonBorde]}
-    >
+    <Pressable onPress={onPress} style={[s.boton, lleno ? s.botonLleno : s.botonBorde]}>
       <Text style={[s.botonTexto, { color: lleno ? '#fff' : C.verde }]}>{texto}</Text>
     </Pressable>
   );
 }
 
-export function Campo({
-  label,
-  ...props
-}: { label: string } & TextInputProps) {
+export function Campo({ label, ...props }: { label: string } & TextInputProps) {
   return (
     <View>
       <Text style={s.label}>{label}</Text>
@@ -138,15 +81,7 @@ export function Campo({
   );
 }
 
-export function Chip({
-  texto,
-  activo,
-  onPress,
-}: {
-  texto: string;
-  activo: boolean;
-  onPress: () => void;
-}) {
+export function Chip({ texto, activo, onPress }: { texto: string; activo: boolean; onPress: () => void }) {
   return (
     <Pressable onPress={onPress} style={[s.chip, activo && s.chipActivo]}>
       <Text style={s.chipTexto}>{texto}</Text>
@@ -162,35 +97,7 @@ export function Foto({ texto, onPress }: { texto: string; onPress?: () => void }
   );
 }
 
-/* ---------- Estilos ---------- */
-
 const s = StyleSheet.create({
-  pantalla: { flex: 1, backgroundColor: C.fondo },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, gap: 10 },
-  flecha: { fontSize: 30, color: C.verde, marginTop: -4 },
-  titulo: { fontSize: 22, fontWeight: '700', color: C.verde, flexShrink: 1 },
-  subtitulo: {
-    fontSize: 13,
-    color: C.gris,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.borde,
-  },
-  contenido: { padding: 16, gap: 12 },
-
-  tabBar: {
-    flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: C.borde,
-    backgroundColor: C.fondo,
-    paddingTop: 8,
-    paddingHorizontal: 6,
-  },
-  tab: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 12 },
-  tabActivo: { backgroundColor: C.verdeClaro },
-  tabTexto: { fontSize: 12, color: C.texto },
-
   card: {
     borderWidth: 1,
     borderColor: C.borde,
@@ -199,12 +106,10 @@ const s = StyleSheet.create({
     backgroundColor: C.fondo,
     gap: 4,
   },
-
   boton: { borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   botonLleno: { backgroundColor: C.verde },
   botonBorde: { borderWidth: 1.5, borderColor: C.verde },
   botonTexto: { fontSize: 15, fontWeight: '700' },
-
   label: { fontSize: 13, fontWeight: '700', color: C.texto, marginBottom: 6 },
   input: {
     borderWidth: 1,
@@ -216,7 +121,6 @@ const s = StyleSheet.create({
     color: C.texto,
     backgroundColor: C.fondo,
   },
-
   chip: {
     borderWidth: 1,
     borderColor: C.borde,
@@ -226,7 +130,6 @@ const s = StyleSheet.create({
   },
   chipActivo: { backgroundColor: C.verdeClaro, borderColor: C.verde },
   chipTexto: { fontSize: 13, color: C.texto },
-
   foto: {
     backgroundColor: C.durazno,
     borderWidth: 1,
