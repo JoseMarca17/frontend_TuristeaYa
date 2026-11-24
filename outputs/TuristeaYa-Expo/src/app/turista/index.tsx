@@ -94,7 +94,7 @@ export default function InicioScreen() {
       {hasActiveVip ? (
         <ListCard
           title="Membresía VIP activa · Sin anuncios"
-          body="Alertas tempranas activadas, descargas offline SQLite y rutas avanzadas de múltiples paradas."
+          body="Alertas tempranas activadas, rutas avanzadas y mapas disponibles sin conexión."
           onPress={() => router.navigate('/vip')}
         />
       ) : null}

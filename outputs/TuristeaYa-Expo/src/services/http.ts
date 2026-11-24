@@ -72,9 +72,12 @@ export async function request<T>(path: string, {
 
   if (!silent) {
     network.begin(reqId, label || inferLabel(method, path), isMutation);
+    // Render puede necesitar varios segundos para despertar. Mostrar el
+    // estado lento a los 450 ms hacía competir al loader global con el de la
+    // pantalla y daba la impresión de que cada lectura estaba fallando.
     slowTimer = setTimeout(() => {
       useNetworkStore.getState().markSlow(reqId);
-    }, 450);
+    }, 5000);
   }
 
   try {

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/use-auth-store';
 import { AppText } from '@/components/ui/app-text';
 import { GlobalLoader } from '@/components/ui/global-loader';
 import { GlobalToast } from '@/components/ui/global-toast';
+import { useOfflineStore } from '@/stores/use-offline-store';
 
 import { Inter_400Regular, Inter_700Bold, useFonts } from '@expo-google-fonts/inter';
 import { Stack } from 'expo-router';
@@ -18,6 +19,14 @@ SplashScreen.preventAutoHideAsync();
 /** Raíz: carga la tipografía Inter, restaura la sesión y monta el loader/toast globales. */
 export default function RootLayout() {
   const [sessionReady, setSessionReady] = useState(false);
+  const authSession = useAuthStore((state) => state.session);
+  const demoRole = useAuthStore((state) => state.demoRole);
+  const loadOfflineSnapshots = useOfflineStore((state) => state.loadSnapshots);
+
+  useEffect(() => {
+    const userId = authSession?.user.id || (demoRole ? `demo-${demoRole}` : undefined);
+    void loadOfflineSnapshots(userId);
+  }, [authSession?.user.id, demoRole, loadOfflineSnapshots]);
 
   useEffect(() => {
     const sync = () => {

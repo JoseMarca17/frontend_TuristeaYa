@@ -30,6 +30,7 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
   const demoRoutes = useDemoStore((s) => s.routes);
   const demoReservations = useDemoStore((s) => s.reservations);
   const demoVisits = useDemoStore((s) => s.visits);
+  const demoPlaces = useDemoStore((s) => s.places);
   const demoTickets = useDemoStore((s) => s.tickets);
   const markDemoNotifRead = useDemoStore((s) => s.markNotificationRead);
   const deleteDemoNotif = useDemoStore((s) => s.deleteNotification);
@@ -40,16 +41,11 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
   const load = useCallback(async (signal: AbortSignal) => {
     if (!session) {
       if (!isDemo) return null;
-      const [routes, places] = await Promise.all([
-        listRecords('routes', { signal }).catch(() => []),
-        listRecords('places', { signal }).catch(() => []),
-      ]);
       const routeNames = new Map<string, string>([
-        ...routes.map((r): [string, string] => [r.id, String(r.name || 'Ruta')]),
         ...demoRoutes.map((r): [string, string] => [r.id, r.name]),
       ]);
       const placeNames = new Map<string, string>(
-        places.map((p): [string, string] => [p.id, String(p.name || 'Lugar')]),
+        demoPlaces.map((p): [string, string] => [p.id, String(p.name || 'Lugar')]),
       );
 
       return [
@@ -151,6 +147,7 @@ export default function AccountScreen({ section }: { section?: string } = {}) {
     demoSavedIds,
     demoVisitedIds,
     demoRoutes,
+    demoPlaces,
     demoReservations,
     demoVisits,
     demoTickets,

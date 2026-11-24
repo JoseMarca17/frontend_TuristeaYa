@@ -1,5 +1,4 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText } from '@/components/ui/app-text';
 import { useNetworkStore } from '@/stores/use-network-store';
 import { colors, radius, spacing } from '@/theme';
@@ -7,16 +6,16 @@ import { colors, radius, spacing } from '@/theme';
 /**
  * Loader global conectado a Zustand (`useNetworkStore`).
  * - Para mutaciones (POST/PATCH/DELETE), muestra un card modal centrado no ambiguo.
- * - Para lecturas (GET) en vuelo o lentas, muestra una píldora flotante visible arriba.
+ * Las lecturas muestran su estado dentro de cada pantalla. Aquí solo se
+ * bloquean mutaciones para evitar duplicar el indicador de carga de los GET.
  */
 export function GlobalLoader() {
-  const insets = useSafeAreaInsets();
   const activeCount = useNetworkStore((s) => s.activeCount);
   const mutationCount = useNetworkStore((s) => s.mutationCount);
   const activeLabel = useNetworkStore((s) => s.activeLabel);
   const isSlow = useNetworkStore((s) => s.isSlow);
 
-  if (activeCount === 0) return null;
+  if (activeCount === 0 || mutationCount === 0) return null;
 
   if (mutationCount > 0) {
     return (
@@ -36,28 +35,7 @@ export function GlobalLoader() {
     );
   }
 
-  return (
-    <View
-      style={[styles.topWrap, { top: Math.max(insets.top + 8, 12) }]}
-      pointerEvents="none"
-      accessibilityRole="progressbar"
-      accessibilityLabel={activeLabel || 'Cargando'}
-    >
-      <View style={[styles.pill, isSlow && styles.pillSlow]}>
-        <ActivityIndicator size="small" color={isSlow ? colors.ink : colors.primary} />
-        <View style={styles.pillTextWrap}>
-          <AppText variant="label" style={styles.pillTitle} numberOfLines={1}>
-            {activeLabel || 'Cargando datos…'}
-          </AppText>
-          {isSlow ? (
-            <AppText variant="micro" color="inkSoft" numberOfLines={1}>
-              Render está tardando un poco más de lo normal…
-            </AppText>
-          ) : null}
-        </View>
-      </View>
-    </View>
-  );
+  return null;
 }
 
 const styles = StyleSheet.create({
@@ -96,39 +74,5 @@ const styles = StyleSheet.create({
   modalSubtitle: {
     textAlign: 'center',
     color: colors.inkSoft,
-  },
-  topWrap: {
-    position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    alignItems: 'center',
-    zIndex: 998,
-  },
-  pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.borderGreen,
-    borderRadius: 999,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    maxWidth: 380,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  pillSlow: {
-    backgroundColor: colors.highlight,
-    borderColor: colors.borderHighlight,
-  },
-  pillTextWrap: {
-    flexShrink: 1,
-  },
-  pillTitle: {
-    color: colors.ink,
   },
 });

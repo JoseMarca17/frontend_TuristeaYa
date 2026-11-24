@@ -76,8 +76,8 @@ export default function CatalogScreen() {
 
   const load = useCallback(async (signal: AbortSignal) => {
     const [places, routes, reviews, categories, placeCategories, hours] = await Promise.all([
-      listRecords('places', { signal }),
-      listRecords('routes', { signal, private: Boolean(session) }),
+      listRecords('places', { signal }).catch(() => []),
+      listRecords('routes', { signal, private: Boolean(session) }).catch(() => []),
       listRecords('reviews', { signal }).catch(() => []),
       listRecords('categories', { signal }).catch(() => []),
       listRecords('place-categories', { signal }).catch(() => []),

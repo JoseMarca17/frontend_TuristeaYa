@@ -18,6 +18,7 @@ import { deleteRecord } from '@/services/management';
 import { benefitHistory as demoBenefits, offlineRoutes as demoOfflineRoutes } from '@/services/mock/vip';
 import type { OfflineRouteSnapshot } from '@/services/offline-storage.types';
 import { useAuthStore } from '@/stores/use-auth-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { useOfflineStore } from '@/stores/use-offline-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { colors, radius, spacing } from '@/theme';
@@ -25,6 +26,8 @@ import { colors, radius, spacing } from '@/theme';
 export function VipPanel() {
   const session = useAuthStore((s) => s.session);
   const demoRole = useAuthStore((s) => s.demoRole);
+  const demoExperiences = useDemoStore((s) => s.experiences);
+  const demoRoutes = useDemoStore((s) => s.routes);
   const showToast = useUiStore((s) => s.showToast);
 
   const offlineItems = useOfflineStore((s) => s.items);
@@ -42,6 +45,36 @@ export function VipPanel() {
   const effectiveUserId = session?.user.id || (isDemoVip ? 'demo-vip' : 'guest');
 
   const load = useCallback(async (signal: AbortSignal) => {
+    if (!session) {
+      const plans = [{
+        id: 'demo-plan-vip',
+        name: 'TuristeaYA VIP Demo',
+        price: 0,
+        currency: 'Bs',
+        period_days: 30,
+      }];
+      return {
+        plans,
+        routes: demoRoutes.map((route) => ({
+          id: route.id,
+          name: route.name,
+          budget: route.cost,
+          available_minutes: route.durationMin,
+          origin_lat: route.origin.latitude,
+          origin_lng: route.origin.longitude,
+          visibility: route.visibility,
+          user_id: route.userId,
+        })),
+        routeStops: [],
+        places: [],
+        hours: [],
+        vipExperiences: demoExperiences.filter((e) => e.published !== false && e.vip_only),
+        subscriptions: [],
+        downloads: [],
+        redemptions: [],
+        reservations: [],
+      };
+    }
     const [plans, routes, routeStops, places, hours, experiences] = await Promise.all([
       listRecords('subscription-plans', { signal }),
       listRecords('routes', { signal, private: Boolean(session) }),
@@ -50,21 +83,6 @@ export function VipPanel() {
       listRecords('opening-hours', { signal }).catch(() => []),
       listRecords('experiences', { signal }),
     ]);
-
-    if (!session) {
-      return {
-        plans,
-        routes: routes.filter((r) => r.visibility === 'public'),
-        routeStops,
-        places,
-        hours,
-        vipExperiences: experiences.filter((e) => e.published !== false && e.vip_only),
-        subscriptions: [],
-        downloads: [],
-        redemptions: [],
-        reservations: [],
-      };
-    }
 
     const [subscriptions, downloads, redemptions, reservations] = await Promise.all([
       listRecords('subscriptions', { private: true, signal, filters: { user_id: session.user.id } }).catch(() => []),
@@ -85,7 +103,7 @@ export function VipPanel() {
       redemptions: redemptions.filter((row) => row.user_id === session.user.id),
       reservations: reservations.filter((row) => row.user_id === session.user.id),
     };
-  }, [session]);
+  }, [session, demoExperiences, demoRoutes]);
 
   const { data, loading, error, retry } = useRemoteData(load);
 
@@ -250,7 +268,7 @@ export function VipPanel() {
   }
 
   return (
-    <Screen title="Mi cuenta VIP" subtitle="Suscripción, SQLite offline, sin anuncios y beneficios">
+    <Screen title="Mi cuenta VIP" subtitle="Suscripción, mapas sin conexión y beneficios">
       <RoleBanner />
       {loading ? <LoadingState label="Cargando información VIP…" /> : null}
       {error ? <ErrorState message={error} onRetry={retry} /> : null}
@@ -276,7 +294,7 @@ export function VipPanel() {
         <View style={styles.row}>
           <Button title="Experiencias VIP" size="sm" onPress={() => router.navigate('/turista/experiencias')} />
           <Button
-            title={offlineSyncing ? 'Sincronizando…' : 'Sincronizar offline'}
+            title={offlineSyncing ? 'Actualizando…' : 'Actualizar rutas sin conexión'}
             size="sm"
             variant="secondary"
             disabled={offlineSyncing}
@@ -298,11 +316,10 @@ export function VipPanel() {
         />
       ) : null}
 
-      {/* Descargas offline persistentes (SQLite en móvil / AsyncStorage en web) */}
-      <AppText variant="section">Rutas descargadas sin conexión ({offlineItems.length})</AppText>
+      <AppText variant="section">Rutas guardadas para usar sin conexión ({offlineItems.length})</AppText>
       {!vipSummary.active ? (
         <ListCard
-          title="Descargas offline bloqueadas"
+          title="Mapas sin conexión bloqueados"
           body="Activa o renueva tu suscripción VIP para descargar snapshots completos (paradas, horarios, costos y mapa básico)."
         />
       ) : null}
@@ -352,7 +369,7 @@ export function VipPanel() {
             body={`${dl.stopsCount} paradas · ${dl.sizeMb} MB`}
             footer={
               <Button
-                title="Guardar snapshot en SQLite/local"
+                title="Guardar para usar sin conexión"
                 size="sm"
                 onPress={() => {
                   void saveRouteOffline(
@@ -382,7 +399,7 @@ export function VipPanel() {
 
       {vipSummary.active ? (
         <>
-          <AppText variant="label">Guardar ruta de Render para usar sin conexión</AppText>
+          <AppText variant="label">Guardar una ruta para usar sin conexión</AppText>
           {data?.routes.slice(0, 4).map((r) => {
             const alreadyLocal = offlineItems.some((item) => item.routeId === r.id);
             if (alreadyLocal) return null;

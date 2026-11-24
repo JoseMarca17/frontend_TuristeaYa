@@ -22,6 +22,13 @@ import { useOfflineStore } from '@/stores/use-offline-store';
 import { useUiStore } from '@/stores/use-ui-store';
 import { borderWidth, colors, radius, spacing } from '@/theme';
 
+const demoCategories = [
+  { id: 'demo-gastronomia', name: 'Gastronomía' },
+  { id: 'demo-cultura', name: 'Cultura' },
+  { id: 'demo-naturaleza', name: 'Naturaleza' },
+  { id: 'demo-aventura', name: 'Aventura' },
+];
+
 export default function MiperfilScreen() {
   const session = useAuthStore((s) => s.session);
   const demoRole = useAuthStore((s) => s.demoRole);
@@ -45,8 +52,21 @@ export default function MiperfilScreen() {
   const [phoneDraft, setPhoneDraft] = useState<string | null>(null);
   const [nowMs] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
+  const safeDemoInterests = Array.isArray(demoInterests) ? demoInterests : [];
+  const safeDemoReservations = Array.isArray(demoReservations) ? demoReservations : [];
+  const safeLocalRedemptions = Array.isArray(localRedemptions) ? localRedemptions : [];
 
   const load = useCallback(async (signal: AbortSignal) => {
+    if (!session && isDemo) {
+      return {
+        me: null,
+        interests: [],
+        subscriptions: [],
+        reservations: [],
+        redemptions: [],
+        categories: demoCategories,
+      };
+    }
     const categories = await listRecords('categories', { signal }).catch(() => []);
     if (!session) return { me: null, interests: [], subscriptions: [], reservations: [], redemptions: [], categories };
     const [me, interests, subscriptions, reservations, redemptions] = await Promise.all([
@@ -64,7 +84,7 @@ export default function MiperfilScreen() {
       redemptions: redemptions.filter((row) => row.user_id === session.user.id),
       categories,
     };
-  }, [session]);
+  }, [session, isDemo]);
 
   const { data, loading, error, retry } = useRemoteData(load);
   const vipSummary = getVipStatusSummary(
@@ -140,8 +160,8 @@ export default function MiperfilScreen() {
     }
   }
 
-  const totalRedemptions = isDemo ? localRedemptions.length : (data?.redemptions.length ?? 0) || localRedemptions.length;
-  const totalReservations = isDemo ? demoReservations.length : (data?.reservations.length ?? 0);
+  const totalRedemptions = isDemo ? safeLocalRedemptions.length : (data?.redemptions.length ?? 0) || safeLocalRedemptions.length;
+  const totalReservations = isDemo ? safeDemoReservations.length : (data?.reservations.length ?? 0);
 
   return (
     <Screen title="Mi perfil" subtitle="Datos personales, preferencias y actividad">
@@ -168,7 +188,7 @@ export default function MiperfilScreen() {
           <View style={styles.chipWrap}>
             {data.categories.slice(0, 12).map((cat) => {
               const selected = isDemo
-                ? demoInterests.includes(cat.id)
+                ? safeDemoInterests.includes(cat.id)
                 : data.interests.some((row) => row.category_id === cat.id);
               return (
                 <Chip
@@ -195,7 +215,7 @@ export default function MiperfilScreen() {
         <AppText variant="caption" color="inkSoft">
           {totalReservations} reservas · {totalRedemptions} canjes · {offlineCount} rutas sin conexión
         </AppText>
-        {data?.subscriptions.slice(0, 2).map((sub) => (
+        {(data?.subscriptions || []).slice(0, 2).map((sub) => (
           <ListCard
             key={sub.id}
             title={`Suscripción ${String(sub.status || 'activa')}`}

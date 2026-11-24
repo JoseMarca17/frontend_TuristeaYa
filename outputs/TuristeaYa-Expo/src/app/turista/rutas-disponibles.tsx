@@ -100,7 +100,7 @@ export default function RutasDisponiblesScreen() {
 
   const load = useCallback(
     (signal: AbortSignal) =>
-      loadAllBackendRoutes(
+      isDemo ? Promise.resolve([]) : loadAllBackendRoutes(
         {
           searchQuery,
           categories,
@@ -114,7 +114,7 @@ export default function RutasDisponiblesScreen() {
         },
         signal,
       ),
-    [searchQuery, categories, maxBudget, maxMinutes, maxDistanceKm, order, visibility, location.label, session?.user.id],
+    [isDemo, searchQuery, categories, maxBudget, maxMinutes, maxDistanceKm, order, visibility, location.label, session?.user.id],
   );
 
   const { data: results, loading, error, retry } = useRemoteData(load);

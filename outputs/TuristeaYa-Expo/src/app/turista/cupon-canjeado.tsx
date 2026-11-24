@@ -31,6 +31,7 @@ export default function CuponCanjeadoScreen() {
   const demoRole = useAuthStore((s) => s.demoRole);
   const isDemo = !session && Boolean(demoRole);
   const addDemoTicket = useDemoStore((s) => s.addTicket);
+  const demoRoutes = useDemoStore((s) => s.routes);
   const activeCoupon = useCouponStore((s) => s.activeCoupon);
   const redemptions = useCouponStore((s) => s.redemptions);
   const showToast = useUiStore((s) => s.showToast);
@@ -41,9 +42,10 @@ export default function CuponCanjeadoScreen() {
   const [disputeBusy, setDisputeBusy] = useState(false);
 
   const loadRoutes = useCallback(
-    (signal: AbortSignal) =>
-      loadAllBackendRoutes({ currentUserId: session?.user.id, order: 'cost' }, signal),
-    [session?.user.id],
+    (signal: AbortSignal) => isDemo
+      ? Promise.resolve(demoRoutes)
+      : loadAllBackendRoutes({ currentUserId: session?.user.id, order: 'cost' }, signal),
+    [session?.user.id, isDemo, demoRoutes],
   );
   const { data: routes, loading, error, retry } = useRemoteData(loadRoutes);
 

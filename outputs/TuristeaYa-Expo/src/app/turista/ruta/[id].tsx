@@ -449,7 +449,7 @@ export default function RutaDetailScreen() {
   async function downloadOffline() {
     if (!session && demoRole !== 'vip') { router.navigate('/login'); return; }
     if (!isVip) {
-      showToast('Función VIP bloqueada: necesitas suscripción VIP vigente para descargas SQLite.', 'error');
+      showToast('Función VIP bloqueada: necesitas una suscripción VIP vigente para guardar rutas sin conexión.', 'error');
       return;
     }
     if (!backendRoute || mutBusy) return;
@@ -481,7 +481,7 @@ export default function RutaDetailScreen() {
         },
         Boolean(session && demoRole !== 'vip'),
       );
-      showToast('Snapshot offline guardado en almacenamiento persistente.', 'success');
+      showToast('Ruta guardada para usar sin conexión.', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Requiere suscripción VIP activa.', 'error');
     } finally {

@@ -27,6 +27,10 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   error: '',
 
   loadSnapshots: async (userId) => {
+    if (!userId) {
+      set({ items: [], loading: false, lastGlobalSyncAt: null, error: '' });
+      return;
+    }
     set({ loading: true, error: '' });
     try {
       const items = await readOfflineSnapshots(userId);

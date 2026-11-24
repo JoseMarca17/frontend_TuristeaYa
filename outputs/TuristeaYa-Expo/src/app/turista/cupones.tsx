@@ -14,6 +14,7 @@ import { useRemoteData } from '@/hooks/use-remote-data';
 import { listRecords, type CatalogRow } from '@/services/catalog';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { useCouponStore, type RedeemedCoupon } from '@/stores/use-coupon-store';
+import { useDemoStore } from '@/stores/use-demo-store';
 import { colors, radius, spacing } from '@/theme';
 
 type PromoMeta = {
@@ -31,15 +32,19 @@ export default function PantallaCupones() {
   const activeCoupon = useCouponStore((s) => s.activeCoupon);
   const recordRedemption = useCouponStore((s) => s.recordRedemption);
   const setActiveCoupon = useCouponStore((s) => s.setActiveCoupon);
+  const demoPromotions = useDemoStore((s) => s.promotions);
+  const demoPlaces = useDemoStore((s) => s.places);
 
   const [estado, setEstado] = useState<EstadoCupon>('disponibles');
   const [selected, setSelected] = useState<string | null>(null);
 
   const load = useCallback(async (signal: AbortSignal) => {
-    const [promotions, places] = await Promise.all([
-      listRecords('promotions', { signal }),
-      listRecords('places', { signal }),
+    const [remotePromotions, remotePlaces] = await Promise.all([
+      listRecords('promotions', { signal }).catch(() => []),
+      listRecords('places', { signal }).catch(() => []),
     ]);
+    const promotions = demoRole ? [...demoPromotions, ...remotePromotions] : remotePromotions;
+    const places = demoRole ? [...demoPlaces, ...remotePlaces] : remotePlaces;
 
     const placeMap = new Map(places.map((p) => [p.id, String(p.name || '')]));
     const promoMetaMap = new Map<string, PromoMeta>();
@@ -130,7 +135,7 @@ export default function PantallaCupones() {
         };
       });
     return { items, promos: promoMetaMap };
-  }, [estado, session, demoRole, localRedemptions]);
+  }, [estado, session, demoRole, localRedemptions, demoPromotions, demoPlaces]);
 
   const { data, loading, error, retry } = useRemoteData(load);
   const cupones = data?.items ?? [];

@@ -1,3 +1,4 @@
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
@@ -328,12 +329,34 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [qrInput, setQrInput] = useState('');
   const [qrCheckResult, setQrCheckResult] = useState('');
+  const [qrScannerOpen, setQrScannerOpen] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [wizardOpen, setWizardOpen] = useState(initialMode === 'verification');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
 
   const isDemo = !session && demoRole === 'advertiser';
+
+  async function openQrScanner() {
+    const permission = cameraPermission?.granted
+      ? cameraPermission
+      : await requestCameraPermission();
+    if (!permission.granted) {
+      setQrCheckResult('No se concedió permiso para usar la cámara. Puedes introducir el código manualmente.');
+      return;
+    }
+    setQrCheckResult('');
+    setQrScannerOpen(true);
+  }
+
+  function handleQrScanned(result: { data?: string }) {
+    const value = String(result.data || '').trim();
+    if (!value) return;
+    setQrInput(value);
+    setQrScannerOpen(false);
+    setQrCheckResult('Código QR leído. Pulsa «Verificar cupón» para comprobarlo.');
+  }
 
   const load = useCallback(
     async (signal: AbortSignal) => {
@@ -742,12 +765,24 @@ export function BusinessPanel({ mode: initialMode }: { mode: Mode }) {
           {mode === 'promotions' ? (
             <View style={styles.editorCard}>
               <AppText variant="section">Validar código o voucher QR en local</AppText>
+              {qrScannerOpen ? (
+                <View style={styles.qrScannerBox}>
+                  <CameraView
+                    style={StyleSheet.absoluteFill}
+                    facing="back"
+                    barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                    onBarcodeScanned={handleQrScanned}
+                  />
+                  <Button title="Cerrar escáner" size="sm" variant="secondary" onPress={() => setQrScannerOpen(false)} />
+                </View>
+              ) : null}
               <FormField
                 label="Código del cupón o voucher QR escaneado"
                 placeholder="Ej. PACENO2026 o TYA-VOUCHER|PACENO2026|12AB"
                 value={qrInput}
                 onChangeText={setQrInput}
               />
+              <Button title="Escanear con cámara" size="sm" variant="soft" onPress={() => { void openQrScanner(); }} />
               <Button title="Verificar cupón" size="sm" variant="secondary" onPress={() => verifyScannedCoupon(data.rows)} />
               {qrCheckResult ? <AppText variant="bodySmall" color="primary">{qrCheckResult}</AppText> : null}
             </View>
@@ -1124,6 +1159,15 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: spacing.md + 2,
     gap: spacing.sm,
+  },
+  qrScannerBox: {
+    height: 240,
+    overflow: 'hidden',
+    borderRadius: radius.md,
+    backgroundColor: '#111',
+    position: 'relative',
+    justifyContent: 'flex-end',
+    padding: spacing.sm,
   },
   chipRow: {
     flexDirection: 'row',
